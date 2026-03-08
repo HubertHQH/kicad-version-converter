@@ -12,6 +12,7 @@
  * R5: Sheet pin uuid position (move after effects)
  * R6: Remove sheet new attributes (exclude_from_sim, in_bom, on_board, dnp)
  * R7: Remove K9-only elements (table, rule_area, embedded_files)
+ * R8: Remove text_box margins and text/text_box exclude_from_sim
  */
 
 import {
@@ -62,6 +63,7 @@ export function convertKicad9to8(input) {
         r5_sheet_pin_uuid: 0,
         r6_sheet_attrs: 0,
         r7_k9_elements: 0,
+        r8_text_box_attrs: 0,
     };
 
     // R1: Header version/generator downgrade
@@ -100,6 +102,7 @@ export function convertKicad9to8(input) {
     log.push(`R5 sheet pin uuid reordered: ${stats.r5_sheet_pin_uuid}`);
     log.push(`R6 sheet attributes removed: ${stats.r6_sheet_attrs}`);
     log.push(`R7 K9-only elements removed: ${stats.r7_k9_elements}`);
+    log.push(`R8 text/text_box attributes removed: ${stats.r8_text_box_attrs}`);
 
     return { output, log, warnings };
 }
@@ -143,6 +146,14 @@ function transformNode(node, stats, log, warnings) {
     if (node.name === 'sheet') {
         applyRule5(node, stats, log);
         applyRule6(node, stats, log);
+    }
+
+    // R8: text_box margins and text/text_box exclude_from_sim
+    if (node.name === 'text_box') {
+        applyRule8TextBox(node, stats, log);
+    }
+    if (node.name === 'text' || node.name === 'text_box') {
+        applyRule8ExcludeFromSim(node, stats, log);
     }
 
     // Recurse into children
@@ -246,6 +257,34 @@ function applyRule6(sheetNode, stats, log) {
         if (removed > 0) {
             stats.r6_sheet_attrs += removed;
         }
+    }
+}
+
+/**
+ * R8a: Remove margins from text_box elements.
+ * 
+ * KiCad 9:
+ *   (text_box "..." (exclude_from_sim no) (at ...) (size ...) (margins 0.9525 0.9525 0.9525 0.9525) ...)
+ * KiCad 8:
+ *   (text_box "..." (at ...) (size ...) ...)
+ */
+function applyRule8TextBox(node, stats, log) {
+    const removed = removeAllChildren(node, 'margins');
+    if (removed > 0) {
+        stats.r8_text_box_attrs += removed;
+    }
+}
+
+/**
+ * R8b: Remove exclude_from_sim from top-level text and text_box elements.
+ * 
+ * In KiCad 9, text and text_box elements can have (exclude_from_sim no).
+ * KiCad 8 does not support this attribute on text/text_box.
+ */
+function applyRule8ExcludeFromSim(node, stats, log) {
+    const removed = removeAllChildren(node, 'exclude_from_sim');
+    if (removed > 0) {
+        stats.r8_text_box_attrs += removed;
     }
 }
 

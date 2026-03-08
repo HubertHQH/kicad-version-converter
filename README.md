@@ -20,6 +20,7 @@
 | R5 | 调整 sheet pin 中 `uuid` 的位置（移到 `effects` 之后） |
 | R6 | 移除 sheet 的 KiCad 9 新属性（`exclude_from_sim`、`in_bom`、`on_board`、`dnp`） |
 | R7 | 移除 KiCad 9 专有元素（`table`、`rule_area`、`embedded_files`） |
+| R8 | 移除 `text_box` 中的 `margins` 属性及 `text`/`text_box` 中的 `exclude_from_sim` |
 
 ## 快速开始
 

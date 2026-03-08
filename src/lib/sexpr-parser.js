@@ -267,12 +267,22 @@ function serializeList(node, indent) {
         }
     }
 
-    // Add inline args to the opening line
-    if (inlineArgs.length > 0) {
+    // If there are too many inline args (e.g. image data with thousands of
+    // base64 strings), write each on its own line to avoid exceeding KiCad's
+    // maximum line length limit.
+    const MAX_INLINE_ARGS = 6;
+    if (inlineArgs.length > MAX_INLINE_ARGS) {
+        result += '\n';
+        for (const arg of inlineArgs) {
+            result += innerTabs + serializeSExpr(arg, indent + 1) + '\n';
+        }
+    } else if (inlineArgs.length > 0) {
+        // Add inline args to the opening line (normal case)
         result += ' ' + inlineArgs.map(c => serializeSExpr(c, indent + 1)).join(' ');
+        result += '\n';
+    } else {
+        result += '\n';
     }
-
-    result += '\n';
 
     // Add block children on separate lines
     for (let i = blockStartIdx; i < node.children.length; i++) {
