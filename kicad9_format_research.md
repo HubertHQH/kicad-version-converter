@@ -1,12 +1,12 @@
 # KiCad 多版本文件格式差异研究报告（修订版）
 
 > [!NOTE]
-> 本报告基于 KiCad 源码 `sch_file_versions.h` 和实际样例文件对比分析。
-> 涵盖原理图文件（`.kicad_sch`）和符号库文件（`.kicad_sym`）两种格式。
+> 本报告基于 KiCad 源码和实际样例文件对比分析。
+> 涵盖原理图文件（`.kicad_sch`）、符号库文件（`.kicad_sym`）和 PCB 文件（`.kicad_pcb`）三种格式。
 
 ## 背景
 
-KiCad 使用 S-expression 格式保存原理图文件（`.kicad_sch`）和符号库文件（`.kicad_sym`）。文件头的 `version` 字段用 `YYYYMMDD` 日期格式标识。
+KiCad 使用 S-expression 格式保存原理图文件（`.kicad_sch`）、符号库文件（`.kicad_sym`）和 PCB 文件（`.kicad_pcb`）。文件头的 `version` 字段用 `YYYYMMDD` 日期格式标识。
 **KiCad 只保证向后兼容（新版可打开旧版），不支持向前兼容（旧版无法打开新版）。**
 目前市面上**没有**任何现成的 KiCad 9 → KiCad 8 降级工具。
 
@@ -245,7 +245,7 @@ KiCad 8 不强制要求特定排序，元素顺序不同不影响加载。可以
 ### 核心架构
 
 ```
-输入: KiCad 9 .kicad_sch / .kicad_sym 文件
+输入: KiCad 9 .kicad_sch / .kicad_sym / .kicad_pcb 文件
           │
           ▼
    ┌──────────────────┐
@@ -263,12 +263,12 @@ KiCad 8 不强制要求特定排序，元素顺序不同不影响加载。可以
             │
      ┌──────┴──────┐
      ▼             ▼
- ┌─────────┐  ┌──────────┐
- │ 原理图   │  │ 符号库    │
- │ R1-R8   │  │ S1-S4   │  ← K9→K8 转换
- │ R10-R15 │  │ S10-S14 │  ← K8→K7 转换
- └────┬────┘  └────┬────┘
-      └──────┬─────┘
+ ┌─────────┐  ┌──────────┐  ┌──────────┐
+ │ 原理图   │  │ 符号库    │  │   PCB    │
+ │ R1-R8   │  │ S1-S4   │  │ P1-P9   │  ← K9→K8 转换
+ │ R10-R15 │  │ S10-S14 │  │ P10-P20 │  ← K8→K7 转换
+ └────┬────┘  └────┬────┘  └────┬────┘
+      └──────────┬──────────────┘
              ▼
    ┌──────────────────┐
    │ S-expression 序列化│  ← 保持 KiCad 缩进风格
@@ -278,6 +278,9 @@ KiCad 8 不强制要求特定排序，元素顺序不同不影响加载。可以
             ▼
    输出: KiCad 8 或 KiCad 7 兼容文件
 ```
+
+> [!NOTE]
+> PCB 文件使用独立的转换模块 `pcb-converter.js`，但共享相同的 S-expression 解析器和统一转换入口。
 
 ### 实现语言: JavaScript/Node.js
 
@@ -304,10 +307,10 @@ KiCad 8 不强制要求特定排序，元素顺序不同不影响加载。可以
 > [!WARNING]
 > - **有损转换**: 表格、规则区域、嵌入文件等 K9 特有功能在降级时**丢失**
 > - ~~**符号库文件**: `.kicad_sym` 符号库文件也有版本差异，需要单独处理~~ ✅ 已实现
+> - ~~**PCB 文件**: `.kicad_pcb` 文件也有类似的版本问题~~ ✅ 已实现
 > - **多 Sheet 项目**: 每个 `.kicad_sch` 文件都需要单独转换
 > - **项目文件**: `.kicad_pro` 项目文件也需要版本降级处理
-> - **PCB 文件**: `.kicad_pcb` 文件也有类似的版本问题，但属于不同的转换任务
-> - **行长度限制**: KiCad 8 对单行长度有限制，嵌入图片的 base64 数据需逐行输出，否则会报 `maximum line length exceeded`
+> - **行长度限制**: KiCad 8 对单行长度有限制，嵌入图片的 base64 数据需逐行输出。
 
 > [!IMPORTANT]
 > 该工具的目标是"尽力降级"——保留所有核心电路信息（连接性、元器件、值、位置），安全移除或转换 KiCad 9 新增的非关键格式特性。
@@ -449,3 +452,168 @@ KiCad 8 不强制要求特定排序，元素顺序不同不影响加载。可以
 | S12 | `(property "Description" ...)` → `(property "ki_description" ...)` |
 | S13 | `(hide yes)`/`(bold yes)`/`(italic yes)` → 裸原子 |
 | S14 | 移除 `(pin_numbers hide)` 节点；`pin_names` 中移除 `hide` 标记 |
+
+---
+
+## 第三部分：PCB (.kicad_pcb) 格式差异
+
+通过对比 `asset/kicad9/` 和 `asset/kicad8/` 中的 video、pic_programmer 等包含 PCB 的样例项目，总结出以下版本差异。
+
+### PCB 差异 1: 文件头版本号
+
+```diff
+- (kicad_pcb (version 20240108) (generator "pcbnew") (generator_version "8.0"))
++ (kicad_pcb (version 20241229) (generator "pcbnew") (generator_version "9.0"))
+```
+
+### PCB 差异 2: 层 ID 编号方案 ⚠️ 关键
+
+KiCad 9 使用新的层编号方案（偶数为铜层，奇数为非铜层），KiCad 8 使用传统的 0-49 编号。
+
+```diff
+;; KiCad 9 层定义:
+ (layers
+     (0 "F.Cu" signal)         ;; 0 → 0 (不变)
+     (2 "B.Cu" signal)         ;; 2 → 31
+     (1 "F.Mask" user)         ;; 1 → 39
+     (3 "B.Mask" user)         ;; 3 → 38
+     (5 "F.SilkS" user)        ;; 5 → 37
+     ...
+
+;; KiCad 8 层定义:
+ (layers
+     (0 "F.Cu" signal)
+     (31 "B.Cu" signal)
+     (39 "F.Mask" user)
+     (38 "B.Mask" user)
+     (37 "F.SilkS" user)
+     ...
+```
+
+### PCB 差异 3: `embedded_fonts` ⚠️ 关键
+
+KiCad 9 在**顶层**和**每个 footprint 内部**都添加了 `(embedded_fonts no)`。KiCad 8 不支持这个属性（尤其是 footprint 内的）。
+
+```diff
+;; KiCad 9 顶层:
+    (embedded_fonts no)
+
+;; KiCad 9 footprint 内部:
+    (footprint "xxx"
+        ...
+        (pad "2" ...)
++       (embedded_fonts no)      ← K8 不认识！
+        (model ...)
+    )
+```
+
+### PCB 差异 4: `layerselection` 位掩码格式
+
+KiCad 9 使用 128 位格式（4 段），KiCad 8 使用紧凑格式（2 段）：
+
+```diff
+;; KiCad 9:
+- (layerselection 0x00000000_00000000_000010fc_ffffffff)
+
+;; KiCad 8:
++ (layerselection 0x10fc_ffffffff)
+```
+
+### PCB 差异 5: `tenting` vs `viasonmask`
+
+KiCad 9 在 `setup` 中使用 `(tenting front back)` 替代了 KiCad 8 的 `pcbplotparams` 中的 `(viasonmask no)`：
+
+```diff
+;; KiCad 9 setup:
++ (tenting front back)
+
+;; KiCad 8 pcbplotparams:
++ (viasonmask no)
+```
+
+### PCB 差异 6: pcbplotparams 参数变化
+
+KiCad 9 新增了多个 pcbplotparams 参数，同时移除了部分 KiCad 8 的参数：
+
+**K9 新增（需移除）**:
+- `pdf_metadata`、`pdf_single_document`
+- `plotpadnumbers`、`hidednponfab`、`sketchdnponfab`、`crossoutdnponfab`
+- `plot_black_and_white`
+
+**K8 参数（K9 中已删除，需恢复）**:
+- `plotreference yes`、`plotvalue yes`、`plotfptext yes`
+
+### PCB 差异 7: Dimension style 中的 `arrow_direction` ⚠️ 关键
+
+KiCad 9 在 dimension 的 `style` 节点中新增了 `(arrow_direction outward)`，并将 `keep_text_aligned` 从裸原子改为列表形式：
+
+```diff
+;; KiCad 8 dimension style:
+ (style
+     (thickness 0.2)
+     (arrow_length 1.27)
+     (text_position_mode 0)
+     (extension_height 0.58642)
+     (extension_offset 0) keep_text_aligned)
+
+;; KiCad 9 dimension style:
+ (style
+     (thickness 0.2)
+     (arrow_length 1.27)
+     (text_position_mode 0)
++    (arrow_direction outward)     ← K8 不支持！
+     (extension_height 0.58642)
+     (extension_offset 0)
+-    keep_text_aligned)
++    (keep_text_aligned yes))      ← K8 期望裸原子
+```
+
+### PCB 差异 8: K8 → K7 格式变化
+
+KiCad 8 和 KiCad 7 之间的 PCB 格式差异更大：
+
+| 差异点 | KiCad 8 | KiCad 7 |
+|--------|---------|--------|
+| ID 标识符 | `(uuid "xxx")` | `(tstamp xxx)` |
+| 参考标识 | `(property "Reference" ...)` | `(fp_text reference ...)` |
+| 值 | `(property "Value" ...)` | `(fp_text value ...)` |
+| Datasheet/Description | `(property "Datasheet"/"Description" ...)` | 不存在 |
+| 图纸信息 | `(sheetname "...")` / `(sheetfile "...")` | `(property "Sheetname" "...")` |
+| 锁定状态 | `(locked yes)` 子节点 | footprint 行裸 `locked` 原子 |
+| generator_version | 存在 | 不存在 |
+| pcbplotparams 布尔值 | `yes`/`no` | `true`/`false` |
+
+---
+
+## PCB 降级转换规则
+
+### K9 → K8 规则（P1-P9, P21）
+
+| 规则 | 说明 |
+|------|------|
+| P1 | 文件头降级: `version 20241229 → 20240108`，`generator_version "9.0" → "8.0"` |
+| P2 | 层 ID 重映射: K9 新编号 → K8 传统编号（按层名匹配） |
+| P3 | `layerselection` 位掩码: 128 位 4 段 → 紧凑 2 段格式 |
+| P4 | 移除 `(tenting ...)`，添加 `(viasonmask no)` 到 pcbplotparams |
+| P5 | 移除 `(embedded_fonts ...)` — 顶层和所有 footprint 内部 |
+| P6 | 移除 K9 新增 pcbplotparams 参数 |
+| P7 | 恢复 K8 的 `plotreference`、`plotvalue`、`plotfptext` 参数 |
+| P8 | 移除 K9 专有顶层元素（`embedded_files`、`component_class`） |
+| P9 | 移除 Datasheet/Description 属性字体中的 `thickness` |
+| P21 | 移除 dimension style 中的 `(arrow_direction ...)`，`(keep_text_aligned yes)` → 裸原子 |
+
+### K8 → K7 规则（P10-P20）
+
+| 规则 | 说明 |
+|------|------|
+| P10 | 文件头降级，移除 `generator_version`，`generator` 去引号 |
+| P11 | `(uuid "xxx")` → `(tstamp xxx)` 全局递归转换 |
+| P12 | `(property "Reference" ...)` → `(fp_text reference ...)` |
+| P13 | `(property "Value" ...)` → `(fp_text value ...)` |
+| P14 | 移除 Footprint/Datasheet/Description property |
+| P15 | `(sheetname)`/`(sheetfile)` → `(property ...)` 格式 |
+| P16 | `(locked yes)` → 裸 `locked` 原子 |
+| P17 | 移除 `(legacy_teardrops)` |
+| P18 | 移除 `(allow_soldermask_bridges_in_footprints)` |
+| P19 | pcbplotparams 布尔值 `yes/no` → `true/false` |
+| P20 | 移除 K8 新增 pcbplotparams（`pdf_front/back_fp_property_popups`、`plotfptext`） |

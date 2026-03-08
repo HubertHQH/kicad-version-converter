@@ -1,6 +1,6 @@
 # KiCad Multi-Version Converter
 
-一个基于浏览器的工具，用于将 KiCad 原理图文件（`.kicad_sch`）和符号库文件（`.kicad_sym`）进行版本降级转换，支持以下转换路径：
+一个基于浏览器的工具，用于将 KiCad 原理图文件（`.kicad_sch`）、符号库文件（`.kicad_sym`）和 PCB 文件（`.kicad_pcb`）进行版本降级转换，支持以下转换路径：
 
 - **KiCad 9 → KiCad 8**
 - **KiCad 8 → KiCad 7**
@@ -9,7 +9,7 @@
 ## 功能特性
 
 - **浏览器端转换**：纯前端实现，无需服务器，文件不会上传到任何地方
-- **双文件类型**：同时支持 `.kicad_sch`（原理图）和 `.kicad_sym`（符号库）
+- **三种文件类型**：支持 `.kicad_sch`（原理图）、`.kicad_sym`（符号库）和 `.kicad_pcb`（PCB）
 - **批量处理**：支持同时上传多个文件，一键转换并打包下载
 - **自动检测**：自动检测文件类型和版本，使用对应的转换规则
 - **链式降级**：KiCad 9 → KiCad 7 会自动执行两步转换
@@ -60,6 +60,37 @@
 | S13 | `effects`/`font` 中 `(hide yes)` → 裸 `hide`，`(bold yes)` → 裸 `bold`，`(italic yes)` → 裸 `italic` |
 | S14 | 移除 `(pin_numbers hide)` 节点；`pin_names` 中移除 `hide` 标记 |
 
+### PCB (.kicad_pcb) — KiCad 9 → KiCad 8（P1-P9, P21）
+
+| 规则 | 说明 |
+|------|------|
+| P1 | 文件头版本号降级（`version` → `20240108`，`generator_version` → `8.0`） |
+| P2 | 层 ID 映射：KiCad 9 新编号方案 → KiCad 8 传统编号（0-49） |
+| P3 | `layerselection` 位掩码格式：128 位 → 紧凑格式 |
+| P4 | 移除 `(tenting ...)`，在 `pcbplotparams` 中添加 `(viasonmask no)` |
+| P5 | 移除 `(embedded_fonts ...)` — 顶层和 footprint 内部 |
+| P6 | 移除 K9 新增 pcbplotparams 参数（`pdf_metadata`、`plotpadnumbers`、`hidednponfab` 等） |
+| P7 | 恢复 K8 的 pcbplotparams 参数（`plotreference`、`plotvalue`、`plotfptext`） |
+| P8 | 移除 K9 专有顶层元素（`embedded_files`、`component_class`） |
+| P9 | 移除 Datasheet/Description 属性字体中的 `thickness` |
+| P21 | dimension style 中移除 `(arrow_direction ...)` 并修复 `(keep_text_aligned yes)` → 裸原子 |
+
+### PCB (.kicad_pcb) — KiCad 8 → KiCad 7（P10-P20）
+
+| 规则 | 说明 |
+|------|------|
+| P10 | 文件头降级（`version` → `20221018`，移除 `generator_version`，`generator` 去引号） |
+| P11 | `(uuid "xxx")` → `(tstamp xxx)`（全局递归） |
+| P12 | `(property "Reference" ...)` → `(fp_text reference ...)` |
+| P13 | `(property "Value" ...)` → `(fp_text value ...)` |
+| P14 | 移除 `(property "Footprint"/"Datasheet"/"Description" ...)` |
+| P15 | `(sheetname ...)`/`(sheetfile ...)` → `(property "Sheetname"/"Sheetfile" ...)` |
+| P16 | `(locked yes)` 子节点 → footprint 行上的裸 `locked` 原子 |
+| P17 | 移除 `general` 中的 `(legacy_teardrops ...)` |
+| P18 | 移除 `setup` 中的 `(allow_soldermask_bridges_in_footprints ...)` |
+| P19 | `pcbplotparams` 中布尔值 `yes/no` → `true/false` |
+| P20 | 移除 K8 新增 pcbplotparams（`pdf_front/back_fp_property_popups`、`plotfptext`） |
+
 ## 快速开始
 
 ```bash
@@ -77,7 +108,7 @@ npm run build
 
 - **React** + **Vite** — 前端框架与构建工具
 - **S-expression Parser** — 自定义的 KiCad S-表达式解析器（`src/lib/sexpr-parser.js`）
-- **Converter** — 基于 AST 的版本转换引擎（`src/lib/converter.js` + `src/lib/sym-converter.js`）
+- **Converter** — 基于 AST 的版本转换引擎（`src/lib/converter.js` + `src/lib/sym-converter.js` + `src/lib/pcb-converter.js`）
 
 ## 项目结构
 
@@ -87,7 +118,8 @@ converter/
 │   ├── lib/
 │   │   ├── sexpr-parser.js   # S-expression 解析器和序列化器
 │   │   ├── converter.js      # 统一转换入口 + 原理图转换规则
-│   │   └── sym-converter.js  # 符号库转换规则
+│   │   ├── sym-converter.js  # 符号库转换规则
+│   │   └── pcb-converter.js  # PCB 转换规则
 │   ├── App.jsx               # 主应用组件（文件上传、转换、下载）
 │   └── main.jsx              # 入口文件
 ├── index.html
@@ -101,10 +133,10 @@ converter/
 
 ### 原理图示例
 
-- **`asset/kicad8/`** — KiCad 8 格式的原始原理图文件
-- **`asset/kicad9/`** — KiCad 9 格式的原理图文件（与 kicad8 中的设计内容相同，仅版本不同）
+- **`asset/kicad8/`** — KiCad 8 格式的原理图和 PCB 文件
+- **`asset/kicad9/`** — KiCad 9 格式的原理图和 PCB 文件（与 kicad8 中的设计内容相同，仅版本不同）
 
-两个文件夹中包含了相同的设计项目，方便对比验证转换结果的正确性：
+两个文件夹中包含了相同的设计项目（原理图 + PCB），方便对比验证转换结果的正确性：
 
 | 项目 | 说明 |
 |------|------|
@@ -114,6 +146,8 @@ converter/
 | `video/` | 视频电路设计 |
 
 > **注意**：`kicad9/` 中还额外包含一个 `multichannel/` 项目，该设计使用了 KiCad 9 独有的多通道功能，在 KiCad 8 中无对应设计。
+>
+> `asset/wrongcase/` 目录下存放了用于发现和修复边际案例的测试文件。
 
 ### 符号库示例
 
