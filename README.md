@@ -97,7 +97,9 @@ converter/
 
 ## 示例文件
 
-`asset/` 目录下提供了用于测试和验证的示例原理图文件：
+`asset/` 目录下提供了用于测试和验证的示例文件：
+
+### 原理图示例
 
 - **`asset/kicad8/`** — KiCad 8 格式的原始原理图文件
 - **`asset/kicad9/`** — KiCad 9 格式的原理图文件（与 kicad8 中的设计内容相同，仅版本不同）
@@ -112,3 +114,11 @@ converter/
 | `video/` | 视频电路设计 |
 
 > **注意**：`kicad9/` 中还额外包含一个 `multichannel/` 项目，该设计使用了 KiCad 9 独有的多通道功能，在 KiCad 8 中无对应设计。
+
+### 符号库示例
+
+- **`asset/kicad9/Symbol_v9/`** — KiCad 9 格式的符号库（`.kicad_sym`），共 229 个库文件
+- **`asset/kicad8/Symbol_v8/`** — KiCad 8 格式的符号库，共 230 个库文件
+- **`asset/kicad7/Symbol_v7/`** — KiCad 7 格式的符号库，共 227 个库文件
+
+三个版本包含相同的符号库内容（如 `Buffer.kicad_sym`、`power.kicad_sym`、`Device.kicad_sym` 等），可用于对比验证符号库转换的正确性。
