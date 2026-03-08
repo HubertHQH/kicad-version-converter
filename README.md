@@ -29,7 +29,7 @@
 | R7 | 移除 KiCad 9 专有元素（`table`、`rule_area`、`embedded_files`） |
 | R8 | 移除 `text_box` 中的 `margins` 属性及 `text`/`text_box` 中的 `exclude_from_sim` |
 
-### KiCad 8 → KiCad 7（R10-R14）
+### KiCad 8 → KiCad 7（R10-R15）
 
 | 规则 | 说明 |
 |------|------|
@@ -38,6 +38,7 @@
 | R12 | 移除 `lib_symbols` 符号定义中的 `Description` 属性 |
 | R13 | `effects`/`font` 中 `(hide yes)` → 裸 `hide`，`(bold yes)` → 裸 `bold`，`(italic yes)` → 裸 `italic` |
 | R14 | `(fields_autoplaced yes)` → `(fields_autoplaced)`（移除值参数）；移除 `(dnp)` 节点 |
+| R15 | 嵌入图片非 PNG 格式（如 BMP）自动转换为 PNG（使用 Canvas API，KiCad 7 仅支持 PNG） |
 
 ## 快速开始
 

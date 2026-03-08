@@ -20,6 +20,9 @@
  *   R10: Header downgrade (remove generator_version, unquote generator)
  *   R11: Remove exclude_from_sim from lib_symbols and symbol instances
  *   R12: Remove Description property from lib_symbols
+ *   R13: Convert (hide/bold/italic yes) to bare atoms in effects/font
+ *   R14: Convert (fields_autoplaced yes) → (fields_autoplaced), remove (dnp)
+ *   R15: Convert non-PNG image data (BMP) to PNG format
  */
 
 import {
@@ -85,9 +88,9 @@ export function detectVersion(input) {
  * Main unified conversion function.
  * @param {string} input - KiCad .kicad_sch file content
  * @param {string} targetVersionKey - 'KICAD8' or 'KICAD7'
- * @returns {{ output: string, log: string[], warnings: string[] }}
+ * @returns {Promise<{ output: string, log: string[], warnings: string[] }>}
  */
-export function convertKicad(input, targetVersionKey) {
+export async function convertKicad(input, targetVersionKey) {
     const targetVersion = VERSIONS[targetVersionKey];
     if (!targetVersion) {
         throw new Error(`Unknown target version: ${targetVersionKey}`);
@@ -137,7 +140,7 @@ export function convertKicad(input, targetVersionKey) {
     // Execute conversion chain
     for (const step of steps) {
         log.push(`\n─── ${step.from.label} → ${step.to.label} ───`);
-        step.fn(ast, log, warnings);
+        await step.fn(ast, log, warnings);
     }
 
     // Serialize
@@ -150,7 +153,7 @@ export function convertKicad(input, targetVersionKey) {
 /**
  * Legacy function for backward compatibility.
  */
-export function convertKicad9to8(input) {
+export async function convertKicad9to8(input) {
     return convertKicad(input, 'KICAD8');
 }
 
@@ -158,7 +161,7 @@ export function convertKicad9to8(input) {
 //  KiCad 9 → KiCad 8 Conversion
 // ============================================================
 
-function applyK9toK8(ast, log, warnings) {
+async function applyK9toK8(ast, log, warnings) {
     const stats = {
         r1_header: false,
         r2_pin_names_hide: 0,
@@ -311,13 +314,14 @@ function applyRule8ExcludeFromSim(node, stats, log) {
 //  KiCad 8 → KiCad 7 Conversion
 // ============================================================
 
-function applyK8toK7(ast, log, warnings) {
+async function applyK8toK7(ast, log, warnings) {
     const stats = {
         r10_header: false,
         r11_exclude_from_sim: 0,
         r12_description: 0,
         r13_hide_syntax: 0,
         r14_fields_autoplaced: 0,
+        r15_image_converted: 0,
     };
 
     // R10: Header downgrade
@@ -335,8 +339,11 @@ function applyK8toK7(ast, log, warnings) {
     stats.r10_header = true;
     log.push(`R10: Version → ${VERSIONS.KICAD7.version}, removed generator_version, unquoted generator`);
 
-    // R11-R14: Recursive transformation
+    // R11-R14: Recursive transformation (synchronous)
     transformK8toK7(ast, stats, log, warnings);
+
+    // R15: Convert non-PNG image data to PNG (async, requires Canvas)
+    await convertImagesToPng(ast, stats, log, warnings);
 
     // Summary
     log.push('--- K8→K7 Summary ---');
@@ -345,6 +352,7 @@ function applyK8toK7(ast, log, warnings) {
     log.push(`R12 Description properties removed: ${stats.r12_description}`);
     log.push(`R13 list→atom keywords converted: ${stats.r13_hide_syntax}`);
     log.push(`R14 fields_autoplaced/dnp fixed: ${stats.r14_fields_autoplaced}`);
+    log.push(`R15 images converted to PNG: ${stats.r15_image_converted}`);
 }
 
 function transformK8toK7(node, stats, log, warnings) {
@@ -406,4 +414,106 @@ function transformK8toK7(node, stats, log, warnings) {
     for (const child of node.children) {
         transformK8toK7(child, stats, log, warnings);
     }
+}
+
+// ============================================================
+//  R15: Image BMP → PNG Conversion
+// ============================================================
+
+/**
+ * Collect all (image (data ...)) nodes from the AST and convert
+ * non-PNG image data (e.g. BMP) to PNG format using Canvas API.
+ */
+async function convertImagesToPng(ast, stats, log, warnings) {
+    const imageNodes = [];
+    collectImageNodes(ast, imageNodes);
+
+    for (const imageNode of imageNodes) {
+        const dataNode = findChild(imageNode, 'data');
+        if (!dataNode || dataNode.children.length === 0) continue;
+
+        // Reassemble base64 string from all children
+        const base64Fragments = dataNode.children
+            .filter(c => c.type === 'string' || c.type === 'atom')
+            .map(c => c.value);
+        const fullBase64 = base64Fragments.join('');
+
+        // Check if it's already PNG (PNG magic: iVBOR = base64 of 0x89 0x50 0x4E 0x47)
+        if (fullBase64.startsWith('iVBOR')) {
+            continue; // Already PNG
+        }
+
+        // Check if it's BMP (BMP magic: Qk0 or Qk3 = base64 of 'BM')
+        const isBmp = fullBase64.startsWith('Qk');
+        const format = isBmp ? 'BMP' : 'unknown';
+
+        log.push(`R15: Found ${format} image data (${fullBase64.length} base64 chars), converting to PNG...`);
+
+        try {
+            const pngBase64 = await convertBitmapToPng(fullBase64, isBmp ? 'image/bmp' : 'image/bmp');
+
+            // Replace data node children with new PNG base64 fragments
+            // Split into ~76 char chunks (standard base64 line length)
+            const chunkSize = 76;
+            const newChildren = [];
+            for (let i = 0; i < pngBase64.length; i += chunkSize) {
+                newChildren.push({
+                    type: 'string',
+                    value: pngBase64.substring(i, i + chunkSize),
+                });
+            }
+            dataNode.children = newChildren;
+
+            stats.r15_image_converted++;
+            log.push(`R15: Converted to PNG (${pngBase64.length} base64 chars, ${newChildren.length} fragments)`);
+        } catch (err) {
+            warnings.push(`Failed to convert image to PNG: ${err.message}`);
+            log.push(`R15: WARNING - Image conversion failed: ${err.message}`);
+        }
+    }
+}
+
+/**
+ * Recursively collect all (image ...) nodes from the AST.
+ */
+function collectImageNodes(node, result) {
+    if (!node || node.type !== 'list') return;
+    if (node.name === 'image') {
+        result.push(node);
+        return;
+    }
+    for (const child of node.children) {
+        collectImageNodes(child, result);
+    }
+}
+
+/**
+ * Convert a bitmap (BMP/other) base64 string to PNG base64 string using Canvas API.
+ * @param {string} base64Data - base64-encoded image data
+ * @param {string} mimeType - MIME type of the source image
+ * @returns {Promise<string>} - base64-encoded PNG data (without data URI prefix)
+ */
+function convertBitmapToPng(base64Data, mimeType) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+            try {
+                const canvas = document.createElement('canvas');
+                canvas.width = img.width;
+                canvas.height = img.height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+                const dataUrl = canvas.toDataURL('image/png');
+                // Strip "data:image/png;base64," prefix
+                const pngBase64 = dataUrl.split(',')[1];
+                resolve(pngBase64);
+            } catch (err) {
+                reject(new Error(`Canvas conversion failed: ${err.message}`));
+            }
+        };
+        img.onerror = () => {
+            reject(new Error(`Failed to load image as ${mimeType}`));
+        };
+        img.src = `data:${mimeType};base64,${base64Data}`;
+    });
 }

@@ -75,7 +75,7 @@ function App() {
       allLogs.push(`\n━━━ Converting: ${f.name} → ${target.label} ━━━`)
 
       try {
-        const result = convertKicad(f.content, targetVersion)
+        const result = await convertKicad(f.content, targetVersion)
         updatedFiles[i] = { ...f, status: 'success', result }
 
         allLogs.push(...result.log)
