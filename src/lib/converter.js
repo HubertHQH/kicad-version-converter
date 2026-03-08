@@ -1,18 +1,25 @@
 /**
- * KiCad 9 → KiCad 8 Schematic Converter
+ * KiCad Multi-Version Schematic Converter
  * 
- * Converts .kicad_sch files from KiCad 9 format (version >= 20240101)
- * to KiCad 8 format (version 20231120).
+ * Supports chain-based downgrade conversions:
+ *   KiCad 9 → KiCad 8
+ *   KiCad 8 → KiCad 7
+ *   KiCad 9 → KiCad 7 (chained: 9→8→7)
  * 
- * Conversion rules:
- * R1: Header version/generator downgrade
- * R2: pin_names hide syntax: (hide yes) → bare hide
- * R3: pin hide syntax: (hide yes) → bare hide  
- * R4: Remove embedded_fonts
- * R5: Sheet pin uuid position (move after effects)
- * R6: Remove sheet new attributes (exclude_from_sim, in_bom, on_board, dnp)
- * R7: Remove K9-only elements (table, rule_area, embedded_files)
- * R8: Remove text_box margins and text/text_box exclude_from_sim
+ * Conversion rules (K9 → K8):
+ *   R1: Header version/generator downgrade
+ *   R2: pin_names hide syntax: (hide yes) → bare hide
+ *   R3: pin hide syntax: (hide yes) → bare hide  
+ *   R4: Remove embedded_fonts
+ *   R5: Sheet pin uuid position (move after effects)
+ *   R6: Remove sheet new attributes (exclude_from_sim, in_bom, on_board, dnp)
+ *   R7: Remove K9-only elements (table, rule_area, embedded_files)
+ *   R8: Remove text_box margins and text/text_box exclude_from_sim
+ * 
+ * Conversion rules (K8 → K7):
+ *   R10: Header downgrade (remove generator_version, unquote generator)
+ *   R11: Remove exclude_from_sim from lib_symbols and symbol instances
+ *   R12: Remove Description property from lib_symbols
  */
 
 import {
@@ -22,19 +29,70 @@ import {
     findChildren,
     removeChild,
     removeAllChildren,
+    removePropertyByName,
     setChildValue,
     getChildValue,
 } from './sexpr-parser.js';
 
-const KICAD8_VERSION = '20231120';
-const KICAD8_GENERATOR_VERSION = '8.0';
+// --- Version Definitions ---
+
+const VERSIONS = {
+    KICAD7: { version: '20230121', generatorVersion: null, label: 'KiCad 7' },
+    KICAD8: { version: '20231120', generatorVersion: '8.0', label: 'KiCad 8' },
+    KICAD9: { version: '20250114', generatorVersion: '9.0', label: 'KiCad 9' },
+};
+
+// Ordered from newest to oldest
+const VERSION_CHAIN = [VERSIONS.KICAD9, VERSIONS.KICAD8, VERSIONS.KICAD7];
 
 /**
- * Main conversion function.
- * @param {string} input - KiCad 9 .kicad_sch file content
+ * Detect the KiCad version of input text.
+ * @param {string} input 
+ * @returns {{ version: string, generatorVersion: string, detectedVersion: object, label: string }}
+ */
+export function detectVersion(input) {
+    const versionMatch = input.match(/\(version\s+(\d+)\)/);
+    const generatorMatch = input.match(/\(generator_version\s+"([^"]+)"\)/);
+
+    const version = versionMatch ? versionMatch[1] : 'unknown';
+    const generatorVersion = generatorMatch ? generatorMatch[1] : 'unknown';
+
+    // Determine which major version this corresponds to
+    const versionNum = parseInt(version);
+    let detectedVersion = null;
+    let label = 'Unknown';
+
+    if (versionNum > parseInt(VERSIONS.KICAD8.version)) {
+        detectedVersion = VERSIONS.KICAD9;
+        label = 'KiCad 9';
+    } else if (versionNum > parseInt(VERSIONS.KICAD7.version)) {
+        detectedVersion = VERSIONS.KICAD8;
+        label = 'KiCad 8';
+    } else if (versionNum >= 20200310) {
+        // S-expression format starts from KiCad 6
+        detectedVersion = VERSIONS.KICAD7;
+        label = 'KiCad 7';
+    } else {
+        label = `v${version}`;
+    }
+
+    const isKicad9 = versionNum > parseInt(VERSIONS.KICAD8.version);
+
+    return { version, generatorVersion, detectedVersion, label, isKicad9 };
+}
+
+/**
+ * Main unified conversion function.
+ * @param {string} input - KiCad .kicad_sch file content
+ * @param {string} targetVersionKey - 'KICAD8' or 'KICAD7'
  * @returns {{ output: string, log: string[], warnings: string[] }}
  */
-export function convertKicad9to8(input) {
+export function convertKicad(input, targetVersionKey) {
+    const targetVersion = VERSIONS[targetVersionKey];
+    if (!targetVersion) {
+        throw new Error(`Unknown target version: ${targetVersionKey}`);
+    }
+
     const log = [];
     const warnings = [];
 
@@ -50,11 +108,57 @@ export function convertKicad9to8(input) {
     const inputGenerator = getChildValue(ast, 'generator_version');
     log.push(`Input version: ${inputVersion}, generator: ${inputGenerator}`);
 
-    if (inputVersion && parseInt(inputVersion) <= parseInt(KICAD8_VERSION)) {
-        warnings.push(`File version ${inputVersion} is already KiCad 8 or earlier. No conversion needed.`);
+    // Determine input major version
+    const inputVersionNum = parseInt(inputVersion);
+    const targetVersionNum = parseInt(targetVersion.version);
+
+    if (inputVersionNum <= targetVersionNum) {
+        warnings.push(`File version ${inputVersion} is already ${targetVersion.label} or earlier. No conversion needed.`);
     }
 
-    // Apply conversion rules
+    // Determine which conversion steps to apply (chain from input → target)
+    const steps = [];
+    if (inputVersionNum > parseInt(VERSIONS.KICAD8.version) && targetVersionNum <= parseInt(VERSIONS.KICAD8.version)) {
+        steps.push({ from: VERSIONS.KICAD9, to: VERSIONS.KICAD8, fn: applyK9toK8 });
+    }
+    if (inputVersionNum > parseInt(VERSIONS.KICAD7.version) && targetVersionNum <= parseInt(VERSIONS.KICAD7.version)) {
+        steps.push({ from: VERSIONS.KICAD8, to: VERSIONS.KICAD7, fn: applyK8toK7 });
+    }
+
+    if (steps.length === 0 && inputVersionNum > targetVersionNum) {
+        // Direct header downgrade as fallback
+        setChildValue(ast, 'version', targetVersion.version);
+        if (targetVersion.generatorVersion) {
+            setChildValue(ast, 'generator_version', targetVersion.generatorVersion);
+        }
+        log.push(`Header downgraded to ${targetVersion.label}`);
+    }
+
+    // Execute conversion chain
+    for (const step of steps) {
+        log.push(`\n─── ${step.from.label} → ${step.to.label} ───`);
+        step.fn(ast, log, warnings);
+    }
+
+    // Serialize
+    log.push('\nSerializing output...');
+    const output = serializeSExpr(ast) + '\n';
+
+    return { output, log, warnings };
+}
+
+/**
+ * Legacy function for backward compatibility.
+ */
+export function convertKicad9to8(input) {
+    return convertKicad(input, 'KICAD8');
+}
+
+// ============================================================
+//  KiCad 9 → KiCad 8 Conversion
+// ============================================================
+
+function applyK9toK8(ast, log, warnings) {
     const stats = {
         r1_header: false,
         r2_pin_names_hide: 0,
@@ -66,11 +170,14 @@ export function convertKicad9to8(input) {
         r8_text_box_attrs: 0,
     };
 
-    // R1: Header version/generator downgrade
-    applyRule1(ast, stats, log);
+    // R1: Header
+    setChildValue(ast, 'version', VERSIONS.KICAD8.version);
+    setChildValue(ast, 'generator_version', VERSIONS.KICAD8.generatorVersion);
+    stats.r1_header = true;
+    log.push(`R1: Version → ${VERSIONS.KICAD8.version}, generator_version → "${VERSIONS.KICAD8.generatorVersion}"`);
 
-    // R2-R7: Recursive transformation
-    transformNode(ast, stats, log, warnings);
+    // R2-R8: Recursive transformation
+    transformK9toK8(ast, stats, log, warnings);
 
     // R4: Remove top-level embedded_fonts
     const removedTopFonts = removeAllChildren(ast, 'embedded_fonts');
@@ -90,11 +197,8 @@ export function convertKicad9to8(input) {
         }
     }
 
-    // Serialize
-    log.push('Serializing output...');
-    const output = serializeSExpr(ast) + '\n';
-
-    log.push('--- Conversion Summary ---');
+    // Summary
+    log.push('--- K9→K8 Summary ---');
     log.push(`R1 Header downgraded: ${stats.r1_header ? 'Yes' : 'No'}`);
     log.push(`R2 pin_names hide converted: ${stats.r2_pin_names_hide}`);
     log.push(`R3 pin hide converted: ${stats.r3_pin_hide}`);
@@ -103,52 +207,31 @@ export function convertKicad9to8(input) {
     log.push(`R6 sheet attributes removed: ${stats.r6_sheet_attrs}`);
     log.push(`R7 K9-only elements removed: ${stats.r7_k9_elements}`);
     log.push(`R8 text/text_box attributes removed: ${stats.r8_text_box_attrs}`);
-
-    return { output, log, warnings };
 }
 
-/**
- * R1: Header version/generator downgrade
- */
-function applyRule1(ast, stats, log) {
-    setChildValue(ast, 'version', KICAD8_VERSION);
-    setChildValue(ast, 'generator_version', KICAD8_GENERATOR_VERSION);
-    stats.r1_header = true;
-    log.push(`R1: Version → ${KICAD8_VERSION}, generator_version → "${KICAD8_GENERATOR_VERSION}"`);
-}
-
-/**
- * Recursively walk AST and apply transformation rules.
- */
-function transformNode(node, stats, log, warnings) {
+function transformK9toK8(node, stats, log, warnings) {
     if (!node || node.type !== 'list') return;
 
-    // R2: pin_names and pin_numbers hide syntax
     if (node.name === 'pin_names' || node.name === 'pin_numbers') {
         applyRule2(node, stats, log);
     }
 
-    // R3: pin hide syntax (for pins inside symbol definitions in lib_symbols)
     if (node.name === 'pin') {
         applyRule3(node, stats, log);
     }
 
-    // R4: embedded_fonts inside symbol definitions
     if (node.name === 'symbol' && node.children.length > 0) {
-        // Check if this is a lib_symbol definition (has embedded_fonts)
         const removedFonts = removeAllChildren(node, 'embedded_fonts');
         if (removedFonts > 0) {
             stats.r4_embedded_fonts += removedFonts;
         }
     }
 
-    // R5: Sheet pin uuid position (inside sheet elements)
     if (node.name === 'sheet') {
         applyRule5(node, stats, log);
         applyRule6(node, stats, log);
     }
 
-    // R8: text_box margins and text/text_box exclude_from_sim
     if (node.name === 'text_box') {
         applyRule8TextBox(node, stats, log);
     }
@@ -156,88 +239,43 @@ function transformNode(node, stats, log, warnings) {
         applyRule8ExcludeFromSim(node, stats, log);
     }
 
-    // Recurse into children
     for (const child of node.children) {
-        transformNode(child, stats, log, warnings);
+        transformK9toK8(child, stats, log, warnings);
     }
 }
 
-/**
- * R2: Convert pin_names hide from (hide yes) to bare hide token.
- * 
- * KiCad 9:
- *   (pin_names (offset 1.016) (hide yes))
- * KiCad 8:
- *   (pin_names (offset 1.016) hide)
- */
+// K9→K8 Rule functions (unchanged logic)
+
 function applyRule2(node, stats, log) {
     const hideNode = findChild(node, 'hide');
     if (!hideNode) return;
-
     const hideValue = hideNode.children.length > 0 ? hideNode.children[0].value : 'yes';
-
-    // Remove the (hide yes) list node
     removeChild(node, 'hide');
-
     if (hideValue === 'yes') {
-        // Add bare 'hide' atom
         node.children.push({ type: 'atom', value: 'hide' });
         stats.r2_pin_names_hide++;
     }
-    // If hide is 'no', we just remove it entirely
 }
 
-/**
- * R3: Convert pin hide from (hide yes) to bare hide token.
- * 
- * This handles pin definitions inside lib_symbols.
- * Note: In KiCad S-expressions, the pin node starts with:
- *   (pin TYPE STYLE (at ...) (length L) ...)
- * 
- * KiCad 9:
- *   (pin power_in line (at 0 0 90) (length 0) (hide yes) (name "GND" ...))
- * KiCad 8:
- *   (pin power_in line (at 0 0 90) (length 0) hide (name "GND" ...))
- */
 function applyRule3(node, stats, log) {
     const hideIdx = node.children.findIndex(c => c.type === 'list' && c.name === 'hide');
     if (hideIdx < 0) return;
-
     const hideNode = node.children[hideIdx];
     const hideValue = hideNode.children.length > 0 ? hideNode.children[0].value : 'yes';
-
-    // Remove the (hide yes) list node
     node.children.splice(hideIdx, 1);
-
     if (hideValue === 'yes') {
-        // Insert bare 'hide' atom at the same position
         node.children.splice(hideIdx, 0, { type: 'atom', value: 'hide' });
         stats.r3_pin_hide++;
     }
 }
 
-/**
- * R5: Move sheet pin uuid from before effects to after effects.
- * 
- * KiCad 9 (uuid before effects):
- *   (pin "NAME" type (at X Y R) (uuid "...") (effects ...))
- * KiCad 8 (uuid after effects):
- *   (pin "NAME" type (at X Y R) (effects ...) (uuid "..."))
- */
 function applyRule5(sheetNode, stats, log) {
-    // Find pin children inside the sheet
     const pinNodes = findChildren(sheetNode, 'pin');
-
     for (const pinNode of pinNodes) {
         const uuidIdx = pinNode.children.findIndex(c => c.type === 'list' && c.name === 'uuid');
         const effectsIdx = pinNode.children.findIndex(c => c.type === 'list' && c.name === 'effects');
-
-        // Only reorder if uuid is BEFORE effects (KiCad 9 style)
         if (uuidIdx >= 0 && effectsIdx >= 0 && uuidIdx < effectsIdx) {
-            // Remove uuid from current position
             const [uuidNode] = pinNode.children.splice(uuidIdx, 1);
-            // effectsIdx is now shifted by -1 since we removed uuid before it
-            // Insert uuid after effects (which is now at effectsIdx - 1)
             const newEffectsIdx = pinNode.children.findIndex(c => c.type === 'list' && c.name === 'effects');
             pinNode.children.splice(newEffectsIdx + 1, 0, uuidNode);
             stats.r5_sheet_pin_uuid++;
@@ -245,13 +283,8 @@ function applyRule5(sheetNode, stats, log) {
     }
 }
 
-/**
- * R6: Remove sheet new attributes (KiCad 9 only).
- * Remove: exclude_from_sim, in_bom, on_board, dnp from sheet elements.
- */
 function applyRule6(sheetNode, stats, log) {
     const attrsToRemove = ['exclude_from_sim', 'in_bom', 'on_board', 'dnp'];
-
     for (const attr of attrsToRemove) {
         const removed = removeAllChildren(sheetNode, attr);
         if (removed > 0) {
@@ -260,14 +293,6 @@ function applyRule6(sheetNode, stats, log) {
     }
 }
 
-/**
- * R8a: Remove margins from text_box elements.
- * 
- * KiCad 9:
- *   (text_box "..." (exclude_from_sim no) (at ...) (size ...) (margins 0.9525 0.9525 0.9525 0.9525) ...)
- * KiCad 8:
- *   (text_box "..." (at ...) (size ...) ...)
- */
 function applyRule8TextBox(node, stats, log) {
     const removed = removeAllChildren(node, 'margins');
     if (removed > 0) {
@@ -275,12 +300,6 @@ function applyRule8TextBox(node, stats, log) {
     }
 }
 
-/**
- * R8b: Remove exclude_from_sim from top-level text and text_box elements.
- * 
- * In KiCad 9, text and text_box elements can have (exclude_from_sim no).
- * KiCad 8 does not support this attribute on text/text_box.
- */
 function applyRule8ExcludeFromSim(node, stats, log) {
     const removed = removeAllChildren(node, 'exclude_from_sim');
     if (removed > 0) {
@@ -288,18 +307,103 @@ function applyRule8ExcludeFromSim(node, stats, log) {
     }
 }
 
-/**
- * Detect the KiCad version of input text.
- * @param {string} input 
- * @returns {{ version: string, generatorVersion: string, isKicad9: boolean }}
- */
-export function detectVersion(input) {
-    const versionMatch = input.match(/\(version\s+(\d+)\)/);
-    const generatorMatch = input.match(/\(generator_version\s+"([^"]+)"\)/);
+// ============================================================
+//  KiCad 8 → KiCad 7 Conversion
+// ============================================================
 
-    const version = versionMatch ? versionMatch[1] : 'unknown';
-    const generatorVersion = generatorMatch ? generatorMatch[1] : 'unknown';
-    const isKicad9 = parseInt(version) > parseInt(KICAD8_VERSION);
+function applyK8toK7(ast, log, warnings) {
+    const stats = {
+        r10_header: false,
+        r11_exclude_from_sim: 0,
+        r12_description: 0,
+        r13_hide_syntax: 0,
+        r14_fields_autoplaced: 0,
+    };
 
-    return { version, generatorVersion, isKicad9 };
+    // R10: Header downgrade
+    setChildValue(ast, 'version', VERSIONS.KICAD7.version);
+    removeChild(ast, 'generator_version');
+
+    // Unquote generator: change from string to atom
+    const generatorNode = findChild(ast, 'generator');
+    if (generatorNode && generatorNode.children.length > 0) {
+        const genChild = generatorNode.children[0];
+        if (genChild.type === 'string') {
+            genChild.type = 'atom';
+        }
+    }
+    stats.r10_header = true;
+    log.push(`R10: Version → ${VERSIONS.KICAD7.version}, removed generator_version, unquoted generator`);
+
+    // R11-R14: Recursive transformation
+    transformK8toK7(ast, stats, log, warnings);
+
+    // Summary
+    log.push('--- K8→K7 Summary ---');
+    log.push(`R10 Header downgraded: ${stats.r10_header ? 'Yes' : 'No'}`);
+    log.push(`R11 exclude_from_sim removed: ${stats.r11_exclude_from_sim}`);
+    log.push(`R12 Description properties removed: ${stats.r12_description}`);
+    log.push(`R13 list→atom keywords converted: ${stats.r13_hide_syntax}`);
+    log.push(`R14 fields_autoplaced/dnp fixed: ${stats.r14_fields_autoplaced}`);
+}
+
+function transformK8toK7(node, stats, log, warnings) {
+    if (!node || node.type !== 'list') return;
+
+    // R11: Remove exclude_from_sim from ALL nodes
+    // KiCad 7 does not have exclude_from_sim anywhere
+    {
+        const removed = removeAllChildren(node, 'exclude_from_sim');
+        if (removed > 0) {
+            stats.r11_exclude_from_sim += removed;
+        }
+    }
+
+    // R12: Remove Description property from lib_symbol definitions
+    // In K8, lib_symbols have (property "Description" "..." ...) that K7 doesn't have
+    if (node.name === 'symbol') {
+        const removed = removePropertyByName(node, 'Description');
+        if (removed > 0) {
+            stats.r12_description += removed;
+        }
+    }
+
+    // R13: Convert (hide yes), (bold yes), (italic yes) list syntax to bare atoms
+    // KiCad 8 uses list syntax, KiCad 7 uses bare keyword atoms
+    if (node.name === 'effects' || node.name === 'font') {
+        const keywords = ['hide', 'bold', 'italic'];
+        for (const keyword of keywords) {
+            const idx = node.children.findIndex(c => c.type === 'list' && c.name === keyword);
+            if (idx >= 0) {
+                const listNode = node.children[idx];
+                const value = listNode.children.length > 0 ? listNode.children[0].value : 'yes';
+                node.children.splice(idx, 1);
+                if (value === 'yes') {
+                    node.children.splice(idx, 0, { type: 'atom', value: keyword });
+                }
+                stats.r13_hide_syntax++;
+            }
+        }
+    }
+
+    // R14: Convert (fields_autoplaced yes) → (fields_autoplaced) and remove (dnp ...)
+    // KiCad 7 uses (fields_autoplaced) as a bare flag without value
+    // KiCad 7 does not have (dnp) attribute on symbol instances
+    if (node.name === 'fields_autoplaced') {
+        // Remove the 'yes' child, making it a bare (fields_autoplaced) node
+        node.children = node.children.filter(c => !(c.type === 'atom' && (c.value === 'yes' || c.value === 'no')));
+        stats.r14_fields_autoplaced++;
+    }
+
+    // Remove dnp from symbol instances (K7 doesn't have it)
+    {
+        const removed = removeAllChildren(node, 'dnp');
+        if (removed > 0) {
+            stats.r14_fields_autoplaced += removed;
+        }
+    }
+
+    for (const child of node.children) {
+        transformK8toK7(child, stats, log, warnings);
+    }
 }

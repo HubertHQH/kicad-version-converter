@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef } from 'react'
-import { convertKicad9to8, detectVersion } from './lib/converter'
+import { convertKicad, detectVersion } from './lib/converter'
 import './App.css'
 
 function App() {
@@ -7,8 +7,13 @@ function App() {
   const [results, setResults] = useState(null)
   const [converting, setConverting] = useState(false)
   const [dragActive, setDragActive] = useState(false)
-  const [activeTab, setActiveTab] = useState('log') // 'log' | 'preview'
+  const [targetVersion, setTargetVersion] = useState('KICAD8')
   const fileInputRef = useRef(null)
+
+  const targetOptions = [
+    { key: 'KICAD8', label: 'KiCad 8', version: '20231120' },
+    { key: 'KICAD7', label: 'KiCad 7', version: '20230121' },
+  ]
 
   const handleFiles = useCallback(async (fileList) => {
     const schFiles = Array.from(fileList).filter(f => f.name.endsWith('.kicad_sch'))
@@ -27,6 +32,7 @@ function App() {
         content: text,
         version: info.version,
         generatorVersion: info.generatorVersion,
+        label: info.label,
         isKicad9: info.isKicad9,
         status: 'pending',
         result: null,
@@ -56,29 +62,20 @@ function App() {
   const handleConvert = useCallback(async () => {
     if (files.length === 0) return
     setConverting(true)
-    setActiveTab('log')
 
     const allLogs = []
     const allWarnings = []
     const convertedFiles = []
-    let totalStats = {
-      r1_header: 0,
-      r2_pin_names_hide: 0,
-      r3_pin_hide: 0,
-      r4_embedded_fonts: 0,
-      r5_sheet_pin_uuid: 0,
-      r6_sheet_attrs: 0,
-      r7_k9_elements: 0,
-    }
 
     const updatedFiles = [...files]
+    const target = targetOptions.find(t => t.key === targetVersion)
 
     for (let i = 0; i < updatedFiles.length; i++) {
       const f = updatedFiles[i]
-      allLogs.push(`\n━━━ Converting: ${f.name} ━━━`)
+      allLogs.push(`\n━━━ Converting: ${f.name} → ${target.label} ━━━`)
 
       try {
-        const result = convertKicad9to8(f.content)
+        const result = convertKicad(f.content, targetVersion)
         updatedFiles[i] = { ...f, status: 'success', result }
 
         allLogs.push(...result.log)
@@ -88,23 +85,6 @@ function App() {
           name: f.name,
           content: result.output,
         })
-
-        // Accumulate stats from log
-        for (const line of result.log) {
-          const m2 = line.match(/R2 pin_names hide converted: (\d+)/)
-          const m3 = line.match(/R3 pin hide converted: (\d+)/)
-          const m4 = line.match(/R4 embedded_fonts removed: (\d+)/)
-          const m5 = line.match(/R5 sheet pin uuid reordered: (\d+)/)
-          const m6 = line.match(/R6 sheet attributes removed: (\d+)/)
-          const m7 = line.match(/R7 K9-only elements removed: (\d+)/)
-          if (m2) totalStats.r2_pin_names_hide += parseInt(m2[1])
-          if (m3) totalStats.r3_pin_hide += parseInt(m3[1])
-          if (m4) totalStats.r4_embedded_fonts += parseInt(m4[1])
-          if (m5) totalStats.r5_sheet_pin_uuid += parseInt(m5[1])
-          if (m6) totalStats.r6_sheet_attrs += parseInt(m6[1])
-          if (m7) totalStats.r7_k9_elements += parseInt(m7[1])
-        }
-        totalStats.r1_header++
       } catch (err) {
         updatedFiles[i] = { ...f, status: 'error', error: err.message }
         allLogs.push(`ERROR: ${err.message}`)
@@ -117,12 +97,12 @@ function App() {
       logs: allLogs,
       warnings: allWarnings,
       convertedFiles,
-      stats: totalStats,
       fileCount: files.length,
       successCount: convertedFiles.length,
+      targetLabel: target.label,
     })
     setConverting(false)
-  }, [files])
+  }, [files, targetVersion])
 
   const downloadFile = useCallback((name, content) => {
     const blob = new Blob([content], { type: 'text/plain' })
@@ -152,6 +132,13 @@ function App() {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
   }
 
+  const getVersionClass = (label) => {
+    if (label === 'KiCad 9') return 'k9'
+    if (label === 'KiCad 8') return 'k8'
+    if (label === 'KiCad 7') return 'k7'
+    return ''
+  }
+
   return (
     <div className="app-container">
       {/* Header */}
@@ -160,11 +147,11 @@ function App() {
           <div className="app-logo-icon">⚡</div>
           <h1 className="app-title">KiCad Schematic Converter</h1>
         </div>
-        <p className="app-subtitle">Convert KiCad 9 schematics to KiCad 8 format</p>
+        <p className="app-subtitle">Convert KiCad schematics between versions</p>
         <div className="version-badges">
-          <span className="version-badge from">KiCad 9</span>
+          <span className="version-badge from">KiCad 9 / 8</span>
           <span className="version-arrow">→</span>
-          <span className="version-badge to">KiCad 8</span>
+          <span className="version-badge to">KiCad 8 / 7</span>
         </div>
       </header>
 
@@ -197,19 +184,33 @@ function App() {
         </div>
       )}
 
-      {/* File List */}
+      {/* File List + Target Version Selector */}
       {files.length > 0 && !results && (
         <div className="fade-in">
           <div className="batch-controls">
-            <button className="btn btn-primary" onClick={handleConvert} disabled={converting}>
-              {converting ? '⏳ Converting...' : '🔄 Convert All'}
-            </button>
-            <button className="btn btn-ghost" onClick={reset}>
-              ✕ Clear
-            </button>
-            <button className="btn btn-ghost" onClick={() => fileInputRef.current?.click()}>
-              + Add Files
-            </button>
+            <div className="target-version-selector">
+              <label className="target-label">Target Version:</label>
+              {targetOptions.map(opt => (
+                <button
+                  key={opt.key}
+                  className={`btn btn-version ${targetVersion === opt.key ? 'active' : ''}`}
+                  onClick={() => setTargetVersion(opt.key)}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <div className="batch-actions">
+              <button className="btn btn-primary" onClick={handleConvert} disabled={converting}>
+                {converting ? '⏳ Converting...' : '🔄 Convert All'}
+              </button>
+              <button className="btn btn-ghost" onClick={reset}>
+                ✕ Clear
+              </button>
+              <button className="btn btn-ghost" onClick={() => fileInputRef.current?.click()}>
+                + Add Files
+              </button>
+            </div>
             <input
               ref={fileInputRef}
               type="file"
@@ -233,8 +234,8 @@ function App() {
                 <span className="file-info-meta">
                   {formatSize(f.size)}
                 </span>
-                <span className={`file-info-version ${f.isKicad9 ? 'k9' : 'k8'}`}>
-                  v{f.version}
+                <span className={`file-info-version ${getVersionClass(f.label)}`}>
+                  {f.label}
                 </span>
                 <span className={`file-status ${f.status}`}>
                   {f.status === 'pending' && 'Ready'}
@@ -259,35 +260,8 @@ function App() {
                   Conversion Complete
                 </div>
                 <div className="result-subtitle">
-                  {results.successCount}/{results.fileCount} file(s) converted successfully
+                  {results.successCount}/{results.fileCount} file(s) converted to {results.targetLabel}
                 </div>
-              </div>
-            </div>
-
-            <div className="result-stats">
-              <div className="stat-item">
-                <span className="stat-label">pin_names hide</span>
-                <span className="stat-value">{results.stats.r2_pin_names_hide}</span>
-              </div>
-              <div className="stat-item">
-                <span className="stat-label">pin hide</span>
-                <span className="stat-value">{results.stats.r3_pin_hide}</span>
-              </div>
-              <div className="stat-item">
-                <span className="stat-label">embedded_fonts</span>
-                <span className="stat-value">{results.stats.r4_embedded_fonts}</span>
-              </div>
-              <div className="stat-item">
-                <span className="stat-label">sheet pin uuid</span>
-                <span className="stat-value">{results.stats.r5_sheet_pin_uuid}</span>
-              </div>
-              <div className="stat-item">
-                <span className="stat-label">sheet attrs</span>
-                <span className="stat-value">{results.stats.r6_sheet_attrs}</span>
-              </div>
-              <div className="stat-item">
-                <span className="stat-label">K9 elements</span>
-                <span className="stat-value">{results.stats.r7_k9_elements}</span>
               </div>
             </div>
 
@@ -378,7 +352,7 @@ function App() {
 
       {/* Footer */}
       <footer className="app-footer">
-        KiCad Schematic Version Converter • Lossy conversion — K9-only features will be removed
+        KiCad Schematic Version Converter • Lossy conversion — version-specific features will be removed
       </footer>
     </div>
   )

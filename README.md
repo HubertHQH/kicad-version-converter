@@ -1,15 +1,22 @@
-# KiCad 9 → KiCad 8 Schematic Converter
+# KiCad Multi-Version Schematic Converter
 
-一个基于浏览器的工具，用于将 KiCad 9 格式的原理图文件（`.kicad_sch`）降级转换为 KiCad 8 格式，使其可以在 KiCad 8 中正常打开和编辑。
+一个基于浏览器的工具，用于将 KiCad 原理图文件（`.kicad_sch`）进行版本降级转换，支持以下转换路径：
+
+- **KiCad 9 → KiCad 8**
+- **KiCad 8 → KiCad 7**
+- **KiCad 9 → KiCad 7**（链式转换：先 9→8，再 8→7）
 
 ## 功能特性
 
 - **浏览器端转换**：纯前端实现，无需服务器，文件不会上传到任何地方
 - **批量处理**：支持同时上传多个 `.kicad_sch` 文件，一键转换并打包下载
-- **版本检测**：自动识别输入文件的 KiCad 版本
+- **多版本支持**：自动检测文件版本，支持选择目标版本（KiCad 8 或 KiCad 7）
+- **链式降级**：KiCad 9 → KiCad 7 会自动执行两步转换
 - **转换日志**：显示详细的转换过程日志和警告信息
 
 ## 转换规则
+
+### KiCad 9 → KiCad 8（R1-R8）
 
 | 规则 | 说明 |
 |------|------|
@@ -21,6 +28,16 @@
 | R6 | 移除 sheet 的 KiCad 9 新属性（`exclude_from_sim`、`in_bom`、`on_board`、`dnp`） |
 | R7 | 移除 KiCad 9 专有元素（`table`、`rule_area`、`embedded_files`） |
 | R8 | 移除 `text_box` 中的 `margins` 属性及 `text`/`text_box` 中的 `exclude_from_sim` |
+
+### KiCad 8 → KiCad 7（R10-R14）
+
+| 规则 | 说明 |
+|------|------|
+| R10 | 文件头降级（`version` → `20230121`，移除 `generator_version`，`generator` 去引号） |
+| R11 | 递归移除所有节点中的 `exclude_from_sim` 属性 |
+| R12 | 移除 `lib_symbols` 符号定义中的 `Description` 属性 |
+| R13 | `effects`/`font` 中 `(hide yes)` → 裸 `hide`，`(bold yes)` → 裸 `bold`，`(italic yes)` → 裸 `italic` |
+| R14 | `(fields_autoplaced yes)` → `(fields_autoplaced)`（移除值参数）；移除 `(dnp)` 节点 |
 
 ## 快速开始
 

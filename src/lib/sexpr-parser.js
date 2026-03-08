@@ -336,6 +336,25 @@ export function removeAllChildren(node, name) {
 }
 
 /**
+ * Remove property nodes by property name value.
+ * e.g. removePropertyByName(node, 'Description') removes (property "Description" ...).
+ * Returns count of removed nodes.
+ */
+export function removePropertyByName(node, propName) {
+    if (!node || node.type !== 'list') return 0;
+    const before = node.children.length;
+    node.children = node.children.filter(c => {
+        if (c.type !== 'list' || c.name !== 'property') return true;
+        // The first child of a property node is the property name string
+        if (c.children.length > 0 && c.children[0].type === 'string' && c.children[0].value === propName) {
+            return false;
+        }
+        return true;
+    });
+    return before - node.children.length;
+}
+
+/**
  * Get the first atom/string value of a child list node.
  * e.g. for (version 20250114), getChildValue(root, 'version') => '20250114'
  */
