@@ -16,14 +16,16 @@ function App() {
   ]
 
   const handleFiles = useCallback(async (fileList) => {
-    const schFiles = Array.from(fileList).filter(f => f.name.endsWith('.kicad_sch'))
-    if (schFiles.length === 0) {
-      alert('Please select .kicad_sch files')
+    const validExts = ['.kicad_sch', '.kicad_sym']
+    const validFiles = Array.from(fileList).filter(f => validExts.some(ext => f.name.endsWith(ext)))
+    if (validFiles.length === 0) {
+      alert('Please select .kicad_sch or .kicad_sym files')
       return
     }
 
-    const parsed = await Promise.all(schFiles.map(async (file) => {
+    const parsed = await Promise.all(validFiles.map(async (file) => {
       const text = await file.text()
+      const isSymLib = file.name.endsWith('.kicad_sym')
       const info = detectVersion(text)
       return {
         file,
@@ -34,6 +36,7 @@ function App() {
         generatorVersion: info.generatorVersion,
         label: info.label,
         isKicad9: info.isKicad9,
+        fileType: isSymLib ? 'Symbol Library' : 'Schematic',
         status: 'pending',
         result: null,
       }
@@ -145,9 +148,9 @@ function App() {
       <header className="app-header">
         <div className="app-logo">
           <div className="app-logo-icon">⚡</div>
-          <h1 className="app-title">KiCad Schematic Converter</h1>
+          <h1 className="app-title">KiCad Version Converter</h1>
         </div>
-        <p className="app-subtitle">Convert KiCad schematics between versions</p>
+        <p className="app-subtitle">Convert KiCad schematics & symbol libraries between versions</p>
         <div className="version-badges">
           <span className="version-badge from">KiCad 9 / 8</span>
           <span className="version-arrow">→</span>
@@ -167,16 +170,16 @@ function App() {
           >
             <div className="drop-zone-icon">📂</div>
             <div className="drop-zone-title">
-              Drop .kicad_sch files here
+              Drop .kicad_sch / .kicad_sym files here
             </div>
             <div className="drop-zone-hint">
-              or click to browse • Supports batch conversion of multiple files
+              or click to browse • Supports schematics and symbol libraries
             </div>
           </div>
           <input
             ref={fileInputRef}
             type="file"
-            accept=".kicad_sch"
+            accept=".kicad_sch,.kicad_sym"
             multiple
             style={{ display: 'none' }}
             onChange={(e) => handleFiles(e.target.files)}
@@ -211,10 +214,11 @@ function App() {
                 + Add Files
               </button>
             </div>
+
             <input
               ref={fileInputRef}
               type="file"
-              accept=".kicad_sch"
+              accept=".kicad_sch,.kicad_sym"
               multiple
               style={{ display: 'none' }}
               onChange={(e) => {
@@ -229,7 +233,7 @@ function App() {
           <div className="file-list">
             {files.map((f, idx) => (
               <div key={idx} className="file-list-item">
-                <span>📄</span>
+                <span>{f.fileType === 'Symbol Library' ? '🔣' : '📄'}</span>
                 <span className="file-name">{f.name}</span>
                 <span className="file-info-meta">
                   {formatSize(f.size)}
@@ -352,7 +356,7 @@ function App() {
 
       {/* Footer */}
       <footer className="app-footer">
-        KiCad Schematic Version Converter • Lossy conversion — version-specific features will be removed
+        KiCad Version Converter • Supports .kicad_sch &amp; .kicad_sym • Lossy conversion — version-specific features will be removed
       </footer>
     </div>
   )

@@ -1,0 +1,236 @@
+/**
+ * KiCad Symbol Library (.kicad_sym) Version Converter
+ * 
+ * Supports chain-based downgrade conversions for symbol libraries:
+ *   KiCad 9 → KiCad 8
+ *   KiCad 8 → KiCad 7
+ *   KiCad 9 → KiCad 7 (chained: 9→8→7)
+ * 
+ * Conversion rules (K9 → K8):
+ *   S1: Header version/generator downgrade
+ *   S2: pin_names/pin_numbers hide syntax: (hide yes) → bare hide
+ *   S3: pin hide syntax: (hide yes) → bare hide
+ *   S4: Remove embedded_fonts from each symbol
+ * 
+ * Conversion rules (K8 → K7):
+ *   S10: Header downgrade (version, remove generator_version, unquote generator)
+ *   S11: Remove exclude_from_sim from all symbols
+ *   S12: Rename (property "Description" ...) → (property "ki_description" ...)
+ *   S13: Convert (hide/bold/italic yes) to bare atoms in effects/font
+ *   S14: Handle pin_numbers/pin_names hide differences for K7
+ */
+
+import {
+    findChild,
+    findChildren,
+    removeChild,
+    removeAllChildren,
+    setChildValue,
+    getChildValue,
+} from './sexpr-parser.js';
+
+// --- Version Definitions (Symbol Library specific) ---
+
+const SYM_VERSIONS = {
+    KICAD7: { version: '20220914', generatorVersion: null, label: 'KiCad 7' },
+    KICAD8: { version: '20231120', generatorVersion: '8.0', label: 'KiCad 8' },
+    KICAD9: { version: '20241209', generatorVersion: '9.0', label: 'KiCad 9' },
+};
+
+// ============================================================
+//  KiCad 9 → KiCad 8 Conversion (Symbol Library)
+// ============================================================
+
+export async function applySymK9toK8(ast, log, warnings) {
+    const stats = {
+        s1_header: false,
+        s2_pin_names_hide: 0,
+        s3_pin_hide: 0,
+        s4_embedded_fonts: 0,
+    };
+
+    // S1: Header downgrade
+    setChildValue(ast, 'version', SYM_VERSIONS.KICAD8.version);
+    setChildValue(ast, 'generator_version', SYM_VERSIONS.KICAD8.generatorVersion);
+    stats.s1_header = true;
+    log.push(`S1: Version → ${SYM_VERSIONS.KICAD8.version}, generator_version → "${SYM_VERSIONS.KICAD8.generatorVersion}"`);
+
+    // S2-S4: Recursive transformation
+    transformSymK9toK8(ast, stats, log, warnings);
+
+    // Summary
+    log.push('--- K9→K8 Symbol Library Summary ---');
+    log.push(`S1 Header downgraded: ${stats.s1_header ? 'Yes' : 'No'}`);
+    log.push(`S2 pin_names/pin_numbers hide converted: ${stats.s2_pin_names_hide}`);
+    log.push(`S3 pin hide converted: ${stats.s3_pin_hide}`);
+    log.push(`S4 embedded_fonts removed: ${stats.s4_embedded_fonts}`);
+}
+
+function transformSymK9toK8(node, stats, log, warnings) {
+    if (!node || node.type !== 'list') return;
+
+    // S2: pin_names/pin_numbers hide syntax: (hide yes) → bare hide
+    if (node.name === 'pin_names' || node.name === 'pin_numbers') {
+        const hideNode = findChild(node, 'hide');
+        if (hideNode) {
+            const hideValue = hideNode.children.length > 0 ? hideNode.children[0].value : 'yes';
+            removeChild(node, 'hide');
+            if (hideValue === 'yes') {
+                node.children.push({ type: 'atom', value: 'hide' });
+                stats.s2_pin_names_hide++;
+            }
+        }
+    }
+
+    // S3: pin hide syntax: (hide yes) → bare hide (insert at same position)
+    if (node.name === 'pin') {
+        const hideIdx = node.children.findIndex(c => c.type === 'list' && c.name === 'hide');
+        if (hideIdx >= 0) {
+            const hideNode = node.children[hideIdx];
+            const hideValue = hideNode.children.length > 0 ? hideNode.children[0].value : 'yes';
+            node.children.splice(hideIdx, 1);
+            if (hideValue === 'yes') {
+                node.children.splice(hideIdx, 0, { type: 'atom', value: 'hide' });
+                stats.s3_pin_hide++;
+            }
+        }
+    }
+
+    // S4: Remove embedded_fonts from symbol definitions
+    if (node.name === 'symbol' && node.children.length > 0) {
+        const removedFonts = removeAllChildren(node, 'embedded_fonts');
+        if (removedFonts > 0) {
+            stats.s4_embedded_fonts += removedFonts;
+        }
+    }
+
+    for (const child of node.children) {
+        transformSymK9toK8(child, stats, log, warnings);
+    }
+}
+
+// ============================================================
+//  KiCad 8 → KiCad 7 Conversion (Symbol Library)
+// ============================================================
+
+export async function applySymK8toK7(ast, log, warnings) {
+    const stats = {
+        s10_header: false,
+        s11_exclude_from_sim: 0,
+        s12_description: 0,
+        s13_hide_syntax: 0,
+        s14_pin_names: 0,
+    };
+
+    // S10: Header downgrade
+    setChildValue(ast, 'version', SYM_VERSIONS.KICAD7.version);
+    removeChild(ast, 'generator_version');
+
+    // Unquote generator: change from string to atom
+    const generatorNode = findChild(ast, 'generator');
+    if (generatorNode && generatorNode.children.length > 0) {
+        const genChild = generatorNode.children[0];
+        if (genChild.type === 'string') {
+            genChild.type = 'atom';
+        }
+    }
+    stats.s10_header = true;
+    log.push(`S10: Version → ${SYM_VERSIONS.KICAD7.version}, removed generator_version, unquoted generator`);
+
+    // S11-S14: Recursive transformation
+    transformSymK8toK7(ast, stats, log, warnings);
+
+    // Summary
+    log.push('--- K8→K7 Symbol Library Summary ---');
+    log.push(`S10 Header downgraded: ${stats.s10_header ? 'Yes' : 'No'}`);
+    log.push(`S11 exclude_from_sim removed: ${stats.s11_exclude_from_sim}`);
+    log.push(`S12 Description→ki_description renamed: ${stats.s12_description}`);
+    log.push(`S13 list→atom keywords converted: ${stats.s13_hide_syntax}`);
+    log.push(`S14 pin_numbers/pin_names adjusted: ${stats.s14_pin_names}`);
+}
+
+function transformSymK8toK7(node, stats, log, warnings) {
+    if (!node || node.type !== 'list') return;
+
+    // S11: Remove exclude_from_sim from ALL nodes
+    {
+        const removed = removeAllChildren(node, 'exclude_from_sim');
+        if (removed > 0) {
+            stats.s11_exclude_from_sim += removed;
+        }
+    }
+
+    // S12: Rename (property "Description" ...) → (property "ki_description" ...)
+    // In K8/K9, symbols use "Description"; in K7, they use "ki_description"
+    if (node.name === 'symbol') {
+        const propNodes = findChildren(node, 'property');
+        for (const prop of propNodes) {
+            if (prop.children.length > 0) {
+                const nameChild = prop.children[0];
+                if ((nameChild.type === 'string' || nameChild.type === 'atom') && nameChild.value === 'Description') {
+                    nameChild.value = 'ki_description';
+                    stats.s12_description++;
+                }
+            }
+        }
+    }
+
+    // S13: Convert (hide yes), (bold yes), (italic yes) list syntax to bare atoms
+    if (node.name === 'effects' || node.name === 'font') {
+        const keywords = ['hide', 'bold', 'italic'];
+        for (const keyword of keywords) {
+            const idx = node.children.findIndex(c => c.type === 'list' && c.name === keyword);
+            if (idx >= 0) {
+                const listNode = node.children[idx];
+                const value = listNode.children.length > 0 ? listNode.children[0].value : 'yes';
+                node.children.splice(idx, 1);
+                if (value === 'yes') {
+                    node.children.splice(idx, 0, { type: 'atom', value: keyword });
+                }
+                stats.s13_hide_syntax++;
+            }
+        }
+    }
+
+    // S14: Handle pin_numbers/pin_names for K7
+    // K8: (pin_numbers hide) → K7: remove entire pin_numbers node (K7 doesn't use it)
+    // K8: (pin_names (offset 0) hide) → K7: (pin_names (offset 0)) (remove hide, keep node)
+    if (node.name === 'pin_numbers') {
+        // For K7, the pin_numbers node with just 'hide' should be removed entirely
+        // Check if it only has a bare 'hide' atom
+        const hasOnlyHide = node.children.length === 1 &&
+            node.children[0].type === 'atom' && node.children[0].value === 'hide';
+        const isEmpty = node.children.length === 0;
+        if (hasOnlyHide || isEmpty) {
+            // Mark for removal - parent will handle
+            node._removeMe = true;
+            stats.s14_pin_names++;
+        }
+    }
+
+    if (node.name === 'pin_names') {
+        // K8: (pin_names (offset 0) hide) → K7: (pin_names (offset 0))
+        // Remove the bare 'hide' atom
+        const hideIdx = node.children.findIndex(c => c.type === 'atom' && c.value === 'hide');
+        if (hideIdx >= 0) {
+            node.children.splice(hideIdx, 1);
+            stats.s14_pin_names++;
+        }
+    }
+
+    // Remove children marked for removal (pin_numbers with _removeMe)
+    if (node.children) {
+        const beforeLen = node.children.length;
+        node.children = node.children.filter(c => {
+            if (c.type === 'list' && c.name === 'pin_numbers' && c._removeMe) {
+                return false;
+            }
+            return true;
+        });
+        // Clean up any remaining _removeMe flags
+    }
+
+    for (const child of node.children) {
+        transformSymK8toK7(child, stats, log, warnings);
+    }
+}

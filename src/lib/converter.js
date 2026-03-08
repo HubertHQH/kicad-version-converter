@@ -1,28 +1,18 @@
 /**
- * KiCad Multi-Version Schematic Converter
+ * KiCad Multi-Version Converter
  * 
- * Supports chain-based downgrade conversions:
+ * Supports chain-based downgrade conversions for both file types:
+ *   .kicad_sch (Schematic) and .kicad_sym (Symbol Library)
+ * 
+ * Conversion paths:
  *   KiCad 9 → KiCad 8
  *   KiCad 8 → KiCad 7
  *   KiCad 9 → KiCad 7 (chained: 9→8→7)
  * 
- * Conversion rules (K9 → K8):
- *   R1: Header version/generator downgrade
- *   R2: pin_names hide syntax: (hide yes) → bare hide
- *   R3: pin hide syntax: (hide yes) → bare hide  
- *   R4: Remove embedded_fonts
- *   R5: Sheet pin uuid position (move after effects)
- *   R6: Remove sheet new attributes (exclude_from_sim, in_bom, on_board, dnp)
- *   R7: Remove K9-only elements (table, rule_area, embedded_files)
- *   R8: Remove text_box margins and text/text_box exclude_from_sim
- * 
- * Conversion rules (K8 → K7):
- *   R10: Header downgrade (remove generator_version, unquote generator)
- *   R11: Remove exclude_from_sim from lib_symbols and symbol instances
- *   R12: Remove Description property from lib_symbols
- *   R13: Convert (hide/bold/italic yes) to bare atoms in effects/font
- *   R14: Convert (fields_autoplaced yes) → (fields_autoplaced), remove (dnp)
- *   R15: Convert non-PNG image data (BMP) to PNG format
+ * Schematic conversion rules (K9 → K8): R1-R8
+ * Schematic conversion rules (K8 → K7): R10-R15
+ * Symbol library conversion rules (K9 → K8): S1-S4
+ * Symbol library conversion rules (K8 → K7): S10-S14
  */
 
 import {
@@ -37,16 +27,32 @@ import {
     getChildValue,
 } from './sexpr-parser.js';
 
+import {
+    applySymK9toK8,
+    applySymK8toK7,
+} from './sym-converter.js';
+
 // --- Version Definitions ---
 
+// Schematic (.kicad_sch) versions
 const VERSIONS = {
     KICAD7: { version: '20230121', generatorVersion: null, label: 'KiCad 7' },
     KICAD8: { version: '20231120', generatorVersion: '8.0', label: 'KiCad 8' },
     KICAD9: { version: '20250114', generatorVersion: '9.0', label: 'KiCad 9' },
 };
 
-// Ordered from newest to oldest
-const VERSION_CHAIN = [VERSIONS.KICAD9, VERSIONS.KICAD8, VERSIONS.KICAD7];
+// Symbol Library (.kicad_sym) versions (different version numbers)
+const SYM_VERSIONS = {
+    KICAD7: { version: '20220914', generatorVersion: null, label: 'KiCad 7' },
+    KICAD8: { version: '20231120', generatorVersion: '8.0', label: 'KiCad 8' },
+    KICAD9: { version: '20241209', generatorVersion: '9.0', label: 'KiCad 9' },
+};
+
+// File types
+const FILE_TYPES = {
+    SCHEMATIC: 'kicad_sch',
+    SYMBOL_LIB: 'kicad_symbol_lib',
+};
 
 /**
  * Detect the KiCad version of input text.
@@ -86,16 +92,12 @@ export function detectVersion(input) {
 
 /**
  * Main unified conversion function.
- * @param {string} input - KiCad .kicad_sch file content
+ * Supports both .kicad_sch (Schematic) and .kicad_sym (Symbol Library) files.
+ * @param {string} input - KiCad file content
  * @param {string} targetVersionKey - 'KICAD8' or 'KICAD7'
- * @returns {Promise<{ output: string, log: string[], warnings: string[] }>}
+ * @returns {Promise<{ output: string, log: string[], warnings: string[], fileType: string }>}
  */
 export async function convertKicad(input, targetVersionKey) {
-    const targetVersion = VERSIONS[targetVersionKey];
-    if (!targetVersion) {
-        throw new Error(`Unknown target version: ${targetVersionKey}`);
-    }
-
     const log = [];
     const warnings = [];
 
@@ -103,8 +105,23 @@ export async function convertKicad(input, targetVersionKey) {
     log.push('Parsing S-expression...');
     const ast = parseSExpr(input);
 
-    if (!ast || ast.name !== 'kicad_sch') {
-        throw new Error('Invalid KiCad schematic file: root element must be kicad_sch');
+    // Detect file type
+    const fileType = ast?.name;
+    const isSymbolLib = fileType === FILE_TYPES.SYMBOL_LIB;
+    const isSchematic = fileType === FILE_TYPES.SCHEMATIC;
+
+    if (!isSymbolLib && !isSchematic) {
+        throw new Error(`Unsupported file type: root element "${fileType}" is not kicad_sch or kicad_symbol_lib`);
+    }
+
+    const fileTypeLabel = isSymbolLib ? 'Symbol Library' : 'Schematic';
+    log.push(`File type: ${fileTypeLabel}`);
+
+    // Use appropriate version table
+    const versionTable = isSymbolLib ? SYM_VERSIONS : VERSIONS;
+    const targetVersion = versionTable[targetVersionKey];
+    if (!targetVersion) {
+        throw new Error(`Unknown target version: ${targetVersionKey}`);
     }
 
     const inputVersion = getChildValue(ast, 'version');
@@ -114,18 +131,28 @@ export async function convertKicad(input, targetVersionKey) {
     // Determine input major version
     const inputVersionNum = parseInt(inputVersion);
     const targetVersionNum = parseInt(targetVersion.version);
+    const k8VersionNum = parseInt(versionTable.KICAD8.version);
+    const k7VersionNum = parseInt(versionTable.KICAD7.version);
 
     if (inputVersionNum <= targetVersionNum) {
         warnings.push(`File version ${inputVersion} is already ${targetVersion.label} or earlier. No conversion needed.`);
     }
 
-    // Determine which conversion steps to apply (chain from input → target)
+    // Build conversion chain based on file type
     const steps = [];
-    if (inputVersionNum > parseInt(VERSIONS.KICAD8.version) && targetVersionNum <= parseInt(VERSIONS.KICAD8.version)) {
-        steps.push({ from: VERSIONS.KICAD9, to: VERSIONS.KICAD8, fn: applyK9toK8 });
+    if (inputVersionNum > k8VersionNum && targetVersionNum <= k8VersionNum) {
+        if (isSymbolLib) {
+            steps.push({ from: versionTable.KICAD9, to: versionTable.KICAD8, fn: applySymK9toK8 });
+        } else {
+            steps.push({ from: versionTable.KICAD9, to: versionTable.KICAD8, fn: applyK9toK8 });
+        }
     }
-    if (inputVersionNum > parseInt(VERSIONS.KICAD7.version) && targetVersionNum <= parseInt(VERSIONS.KICAD7.version)) {
-        steps.push({ from: VERSIONS.KICAD8, to: VERSIONS.KICAD7, fn: applyK8toK7 });
+    if (inputVersionNum > k7VersionNum && targetVersionNum <= k7VersionNum) {
+        if (isSymbolLib) {
+            steps.push({ from: versionTable.KICAD8, to: versionTable.KICAD7, fn: applySymK8toK7 });
+        } else {
+            steps.push({ from: versionTable.KICAD8, to: versionTable.KICAD7, fn: applyK8toK7 });
+        }
     }
 
     if (steps.length === 0 && inputVersionNum > targetVersionNum) {
@@ -139,7 +166,7 @@ export async function convertKicad(input, targetVersionKey) {
 
     // Execute conversion chain
     for (const step of steps) {
-        log.push(`\n─── ${step.from.label} → ${step.to.label} ───`);
+        log.push(`\n─── ${step.from.label} → ${step.to.label} (${fileTypeLabel}) ───`);
         await step.fn(ast, log, warnings);
     }
 
@@ -147,7 +174,7 @@ export async function convertKicad(input, targetVersionKey) {
     log.push('\nSerializing output...');
     const output = serializeSExpr(ast) + '\n';
 
-    return { output, log, warnings };
+    return { output, log, warnings, fileType: fileTypeLabel };
 }
 
 /**
