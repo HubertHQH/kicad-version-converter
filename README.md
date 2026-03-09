@@ -77,7 +77,7 @@
 | P22 | 移除 zone 中的 `(placement ...)`（KiCad 9 多通道自动放置区域功能，K8 不支持） |
 | P23 | pad teardrops 中 `(curved_edges ...)` → `(curve_points ...)`（K9 重命名，K8 不认识） |
 
-### PCB (.kicad_pcb) — KiCad 8 → KiCad 7（P10-P20）
+### PCB (.kicad_pcb) — KiCad 8 → KiCad 7（P10-P22）
 
 | 规则 | 说明 |
 |------|------|
@@ -92,8 +92,9 @@
 | P18 | 移除 `setup` 中的 `(allow_soldermask_bridges_in_footprints ...)` |
 | P19 | `pcbplotparams` 中布尔值 `yes/no` → `true/false` |
 | P20 | 移除 K8 新增 pcbplotparams（`pdf_front/back_fp_property_popups`、`plotfptext`） |
-| P21 | pad 属性兼容：`(remove_unused_layers yes)` → 裸标志 / `no` 时移除；`(keep_end_layers ...)` 同理；移除 `(pintype ...)`、`(pinfunction ...)` |
+| P21 | pad/via 属性兼容：`(remove_unused_layers yes)` → 裸标志 / `no` 时移除；`(keep_end_layers ...)` 同理；移除 `(pintype ...)`、`(pinfunction ...)`、`(teardrops ...)` |
 | P21b | property/effects/font 中 `(hide yes)` → 裸 `hide`，`(bold yes)` → 裸 `bold`，`(italic yes)` → 裸 `italic` |
+| P22 | 图形元素填充属性 `(fill no)` → `(fill none)`（KiCad 7 只接受 `yes`/`none`/`solid`，不接受 `no`） |
 
 ## 快速开始
 

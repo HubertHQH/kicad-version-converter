@@ -37,6 +37,7 @@
  *        - (remove_unused_layers yes) → bare (remove_unused_layers); remove when "no"
  *        - (keep_end_layers yes) → bare (keep_end_layers); remove when "no"
  *        - Remove (pintype ...) and (pinfunction ...) from pads
+ *   P22: (fill no) → (fill none) in graphic shapes (fp_circle, fp_rect, etc.)
  */
 
 import {
@@ -468,6 +469,7 @@ export async function applyPcbK8toK7(ast, log, warnings) {
         p20_k8_plotparams: 0,
         p21_pad_compat: 0,
         p21b_hide_syntax: 0,
+        p22_fill_no_to_none: 0,
     };
 
     // P10: Header downgrade
@@ -528,6 +530,7 @@ export async function applyPcbK8toK7(ast, log, warnings) {
     log.push(`P20 K8 plotparams removed: ${stats.p20_k8_plotparams}`);
     log.push(`P21 pad attributes fixed: ${stats.p21_pad_compat}`);
     log.push(`P21b hide/bold/italic syntax fixed: ${stats.p21b_hide_syntax}`);
+    log.push(`P22 fill no→none converted: ${stats.p22_fill_no_to_none}`);
 }
 
 /**
@@ -601,6 +604,16 @@ function transformPcbK8toK7(node, stats, log, warnings) {
         applyP21PadCompat(node, stats);
     }
 
+    // P21: Also remove teardrops from vias (K7 doesn't support teardrops anywhere)
+    if (node.name === 'via') {
+        for (let i = node.children.length - 1; i >= 0; i--) {
+            if (node.children[i].type === 'list' && node.children[i].name === 'teardrops') {
+                node.children.splice(i, 1);
+                stats.p21_pad_compat++;
+            }
+        }
+    }
+
     // P21b: Convert (hide yes), (bold yes), (italic yes) list syntax to bare atoms
     // KiCad 8 uses list syntax, KiCad 7 uses bare keyword atoms
     // This applies to property nodes (hide), effects nodes, and font nodes (bold, italic)
@@ -616,6 +629,18 @@ function transformPcbK8toK7(node, stats, log, warnings) {
                     node.children.splice(idx, 0, { type: 'atom', value: keyword });
                 }
                 stats.p21b_hide_syntax++;
+            }
+        }
+    }
+
+    // P22: Convert (fill no) → (fill none)
+    // KiCad 8 uses "no" for unfilled graphic shapes (fp_circle, fp_rect, etc.)
+    // KiCad 7 only accepts "yes", "none", or "solid" as fill values.
+    if (node.name === 'fill') {
+        for (const child of node.children) {
+            if (child.type === 'atom' && child.value === 'no') {
+                child.value = 'none';
+                stats.p22_fill_no_to_none++;
             }
         }
     }
@@ -658,7 +683,7 @@ function applyP21PadCompat(padNode, stats) {
     }
 
     // Remove K8-only pad attributes
-    const k8OnlyAttrs = ['pintype', 'pinfunction'];
+    const k8OnlyAttrs = ['pintype', 'pinfunction', 'teardrops'];
     for (const attrName of k8OnlyAttrs) {
         for (let i = padNode.children.length - 1; i >= 0; i--) {
             const child = padNode.children[i];

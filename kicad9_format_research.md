@@ -635,6 +635,7 @@ KiCad 8 和 KiCad 7 之间的 PCB 格式差异更大：
 | 自定义 property | 支持任意自定义属性（如 `Champ4`） | 仅支持 `ki_fp_filters`、`Sheetname`、`Sheetfile` |
 | property 中 hide | `(hide yes)` 列表形式 | 裸 `hide` 原子 |
 | effects 中 bold/italic | `(bold yes)` / `(italic yes)` | 裸 `bold` / `italic` 原子 |
+| 图形填充值 | `(fill no)` / `(fill yes)` | `(fill none)` / `(fill yes)` — K7 不接受 `no` |
 
 ---
 
@@ -657,7 +658,7 @@ KiCad 8 和 KiCad 7 之间的 PCB 格式差异更大：
 | P22 | 移除 zone 中的 `(placement ...)`（多通道自动放置区域，K9 特有功能） |
 | P23 | pad teardrops 中 `(curved_edges ...)` → `(curve_points ...)`（K9 重命名） |
 
-### K8 → K7 规则（P10-P21b）
+### K8 → K7 规则（P10-P22）
 
 | 规则 | 说明 |
 |------|------|
@@ -674,3 +675,4 @@ KiCad 8 和 KiCad 7 之间的 PCB 格式差异更大：
 | P20 | 移除 K8 新增 pcbplotparams（`pdf_front/back_fp_property_popups`、`plotfptext`） |
 | P21 | pad 属性兼容：`(remove_unused_layers yes)` → 裸标志 / `no` 时移除；`(keep_end_layers)` 同理；移除 `(pintype)`、`(pinfunction)` |
 | P21b | property/effects/font 中 `(hide yes)` → 裸 `hide`，`(bold yes)` → 裸 `bold`，`(italic yes)` → 裸 `italic` |
+| P22 | 图形元素 `(fill no)` → `(fill none)`（K7 只接受 `yes`/`none`/`solid`，不接受 `no`） |
