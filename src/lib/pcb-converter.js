@@ -19,6 +19,7 @@
  *   P9: Remove font thickness from Datasheet/Description property fonts
  *   P21: Remove (arrow_direction) and fix (keep_text_aligned) in dimension style
  *   P22: Remove (placement ...) from zone definitions (multi-channel auto-placement area, K9 only)
+ *   P23: Rename (curved_edges ...) → (curve_points ...) in pad teardrops
  * 
  * Conversion rules (K8 → K7): P10-P20
  *   P10: Header downgrade (version, remove generator_version, unquote generator)
@@ -134,6 +135,7 @@ export async function applyPcbK9toK8(ast, log, warnings) {
         p9_font_thickness: 0,
         p21_dimension_style: 0,
         p22_zone_placement: 0,
+        p23_curved_edges: 0,
     };
 
     // P1: Header downgrade
@@ -187,6 +189,7 @@ export async function applyPcbK9toK8(ast, log, warnings) {
     log.push(`P9 Font thickness cleaned: ${stats.p9_font_thickness}`);
     log.push(`P21 Dimension style fixed: ${stats.p21_dimension_style}`);
     log.push(`P22 Zone placement removed: ${stats.p22_zone_placement}`);
+    log.push(`P23 curved_edges→curve_points renamed: ${stats.p23_curved_edges}`);
 }
 
 /**
@@ -415,6 +418,26 @@ function transformPcbK9toK8(node, stats, log, warnings) {
             stats.p22_zone_placement = (stats.p22_zone_placement || 0) + removed;
             log.push(`P22: Removed ${removed} (placement) from zone`);
             warnings.push(`Removed (placement) from zone - KiCad 9 multi-channel auto-placement feature`);
+        }
+    }
+
+    // P23: Convert (curved_edges yes/no) → (curve_points N) in pad teardrops
+    // K9 uses boolean (curved_edges yes/no), K8 uses numeric (curve_points N).
+    // no → 0, yes → 5 (default curve smoothing point count)
+    if (node.name === 'teardrops') {
+        // Handle K9's curved_edges → rename to curve_points
+        const curvedEdges = findChild(node, 'curved_edges');
+        if (curvedEdges) {
+            curvedEdges.name = 'curve_points';
+        }
+        // Convert boolean yes/no to numeric for curve_points
+        const curvePoints = findChild(node, 'curve_points');
+        if (curvePoints && curvePoints.children.length > 0) {
+            const val = curvePoints.children[0].value;
+            if (val === 'yes' || val === 'no') {
+                curvePoints.children[0].value = (val === 'yes') ? '5' : '0';
+                stats.p23_curved_edges = (stats.p23_curved_edges || 0) + 1;
+            }
         }
     }
 

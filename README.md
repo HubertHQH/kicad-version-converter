@@ -60,7 +60,7 @@
 | S13 | `effects`/`font` 中 `(hide yes)` → 裸 `hide`，`(bold yes)` → 裸 `bold`，`(italic yes)` → 裸 `italic` |
 | S14 | 移除 `(pin_numbers hide)` 节点；`pin_names` 中移除 `hide` 标记 |
 
-### PCB (.kicad_pcb) — KiCad 9 → KiCad 8（P1-P9, P21-P22）
+### PCB (.kicad_pcb) — KiCad 9 → KiCad 8（P1-P9, P21-P23）
 
 | 规则 | 说明 |
 |------|------|
@@ -75,6 +75,7 @@
 | P9 | 移除 Datasheet/Description 属性字体中的 `thickness` |
 | P21 | dimension style 中移除 `(arrow_direction ...)` 并修复 `(keep_text_aligned yes)` → 裸原子 |
 | P22 | 移除 zone 中的 `(placement ...)`（KiCad 9 多通道自动放置区域功能，K8 不支持） |
+| P23 | pad teardrops 中 `(curved_edges ...)` → `(curve_points ...)`（K9 重命名，K8 不认识） |
 
 ### PCB (.kicad_pcb) — KiCad 8 → KiCad 7（P10-P20）
 
