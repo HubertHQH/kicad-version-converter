@@ -3,16 +3,134 @@
 > [!NOTE]
 > 本报告基于 KiCad 源码和实际样例文件对比分析。
 > 涵盖原理图文件（`.kicad_sch`）、符号库文件（`.kicad_sym`）、PCB 文件（`.kicad_pcb`）和封装文件（`.kicad_mod`）四种格式。
+> 覆盖 KiCad 10、9、8、7 四个主要版本之间的格式差异。
 
 ## 背景
 
 KiCad 使用 S-expression 格式保存原理图文件（`.kicad_sch`）、符号库文件（`.kicad_sym`）、PCB 文件（`.kicad_pcb`）和封装文件（`.kicad_mod`）。文件头的 `version` 字段用 `YYYYMMDD` 日期格式标识。
 **KiCad 只保证向后兼容（新版可打开旧版），不支持向前兼容（旧版无法打开新版）。**
-目前市面上**没有**任何现成的 KiCad 9 → KiCad 8 降级工具。
+目前市面上**没有**任何现成的 KiCad 版本降级工具。
 
 ---
 
-## 第一部分：原理图 (.kicad_sch) 格式差异
+## 第零部分：KiCad 10 → KiCad 9 原理图格式差异
+
+通过对比 KiCad 10 和 KiCad 9 的原理图文件，发现了以下**实际差异**：
+
+### K10 差异 1: 文件头版本号
+
+```diff
+- (kicad_sch (version 20250114) (generator "eeschema") (generator_version "9.0"))
++ (kicad_sch (version 20260101) (generator "eeschema") (generator_version "10.0"))
+```
+
+### K10 差异 2: lib_symbol 新增属性
+
+KiCad 10 在 lib_symbol 定义中新增了 `in_pos_files` 和 `duplicate_pin_numbers_are_jumpers` 属性，KiCad 9 没有这些属性：
+```diff
+ (symbol "Device:R"
++    (in_pos_files yes)
++    (duplicate_pin_numbers_are_jumpers no)
+     (in_bom yes)
+     (on_board yes)
+     ...)
+```
+
+### K10 差异 3: property 节点新增 `show_name` 和 `do_not_autoplace`
+
+KiCad 10 在 `property` 节点中新增了 `show_name` 和 `do_not_autoplace` 属性：
+```diff
+ (property "Reference" "R1"
+     (at 0 0 0)
++    (show_name)
++    (do_not_autoplace)
+     (effects ...))
+```
+
+### K10 差异 4: property 层级的 `hide` 位置变化 ⚠️ 关键
+
+KiCad 10 将 `(hide yes)` 提升到 property 的直接子节点，而 KiCad 9 将其放在 `effects` 节点内部：
+```
+;; KiCad 10:
+(property "Footprint" "..."
+    (at 0 0 0)
+    (hide yes)
+    (effects
+        (font (size 1.27 1.27))
+    ))
+
+;; KiCad 9:
+(property "Footprint" "..."
+    (at 0 0 0)
+    (effects
+        (font (size 1.27 1.27))
+        (hide yes)
+    ))
+```
+
+### K10 差异 5: symbol 实例新增 `body_style`
+
+KiCad 10 在放置的 symbol 实例（非 lib_symbol 定义）中新增了 `(body_style ...)` 属性，KiCad 9 没有：
+```diff
+ (symbol
+     (lib_id "Device:R")
+     (at 100 50 0)
++    (body_style 1)
+     (uuid "..."))
+```
+
+### K10 差异 6: `power` 节点新增 `global` 参数
+
+KiCad 10 使用 `(power global)` 标记电源符号，KiCad 9 使用裸 `(power)`：
+```diff
+;; KiCad 10:
+-(power global)
+
+;; KiCad 9:
++(power)
+```
+
+### K10 差异 7: lib_symbol 新增 `body_styles` 节点
+
+KiCad 10 在 lib_symbol 定义中新增了 `(body_styles ...)` 节点，KiCad 9 没有：
+```diff
+ (symbol "Device:R"
++    (body_styles
++        (body_style 1 "")
++    )
+     (pin_names ...)
+     ...)
+```
+
+### K10 差异 8: 空 pin 名称表示方式
+
+KiCad 10 使用空字符串 `""` 表示未命名 pin，KiCad 9 使用波浪号 `"~"`：
+```diff
+;; KiCad 10:
+-(name "" (effects ...))
+
+;; KiCad 9:
++(name "~" (effects ...))
+```
+
+---
+
+### K10 → K9 降级转换规则（N1-N8）
+
+| 规则 | 说明 |
+|------|------|
+| N1 | 文件头降级: `version 20260101 → 20250114`，`generator_version "10.0" → "9.0"` |
+| N2 | 移除 lib_symbol 中的 `(in_pos_files ...)`、`(duplicate_pin_numbers_are_jumpers ...)` |
+| N3 | 移除 property 中的 `(show_name)` 和 `(do_not_autoplace)` |
+| N4 | property 层级 `(hide yes)` → 移入 `effects` 内部（`(effects ... (hide yes))`） |
+| N5 | 移除 symbol 实例中的 `(body_style ...)` |
+| N6 | `(power global)` → `(power)`（移除 `global` 参数） |
+| N7 | 移除 lib_symbol 中的 `(body_styles ...)` 节点 |
+| N8 | lib_symbol pin 名 `(name "")` → `(name "~")`（空字符串 → 波浪号） |
+
+---
+
+## 第一部分：原理图 (.kicad_sch) KiCad 9 → KiCad 8 格式差异
 
 通过对比 `asset/kicad9/` 和 `asset/kicad8/` 中的 video、flat_hierarchy、complex_hierarchy 等样例项目，发现了以下**实际差异**：
 
@@ -163,6 +281,19 @@ KiCad 8 最终格式版本: **`20231120`** (generator_version; V8 cleanups)
 | `20241004` | `hide` 使用布尔值格式 | 🔴 高 | `(hide yes)` → `hide`；`(hide no)` → 移除 |
 | `20241209` | SCH_FIELDs 私有标志 | 🟡 中 | 移除私有标志 |
 
+### KiCad 10 新增格式版本（10.0 分支）
+
+| 版本号 | 变更内容 | 降级难度 | 降级方式 |
+|--------|----------|----------|----------|
+| `20260101` | 文件头版本号升级 | 🟢 低 | 版本号降级 |
+| — | lib_symbol 新增 `in_pos_files`、`duplicate_pin_numbers_are_jumpers` | 🟢 低 | 移除这些属性 |
+| — | property 新增 `show_name`、`do_not_autoplace` | 🟢 低 | 移除这些属性 |
+| — | property `hide` 位置提升到 property 层级 | 🟡 中 | 移回 effects 内部 |
+| — | symbol 实例新增 `body_style` | 🟢 低 | 移除此属性 |
+| — | `(power global)` 新语法 | 🟢 低 | 移除 `global` 参数 |
+| — | lib_symbol 新增 `body_styles` 节点 | 🟢 低 | 移除此节点 |
+| — | 空 pin 名用 `""` 替代 `"~"` | 🟢 低 | 空字符串替换为波浪号 |
+
 ---
 
 ## 降级转换规则详细定义
@@ -245,7 +376,7 @@ KiCad 8 不强制要求特定排序，元素顺序不同不影响加载。可以
 ### 核心架构
 
 ```
-输入: KiCad 9 .kicad_sch / .kicad_sym / .kicad_pcb / .kicad_mod 文件
+输入: KiCad 10/9 .kicad_sch / .kicad_sym / .kicad_pcb / .kicad_mod 文件
           │
           ▼
    ┌──────────────────┐
@@ -256,17 +387,20 @@ KiCad 8 不强制要求特定排序，元素顺序不同不影响加载。可以
             │
             ▼
    ┌──────────────────────────────────┐
-   │   文件类型检测                     │
+   │   文件类型检测 + 版本检测          │
    │   kicad_sch → 原理图规则          │
    │   kicad_symbol_lib → 符号库规则   │
+   │   kicad_pcb → PCB 规则            │
+   │   footprint → 封装规则            │
    └────────┬─────────────────────────┘
             │
      ┌──────┴──────┐
      ▼             ▼
  ┌─────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
  │ 原理图   │  │ 符号库    │  │   PCB    │  │  封装    │
+ │ N1-N8   │  │ N1-N8   │  │         │  │         │  ← K10→K9 转换
  │ R1-R8   │  │ S1-S4   │  │ P1-P9   │  │ F1-F4   │  ← K9→K8 转换
- │ R10-R15 │  │ S10-S14 │  │ P10-P20 │  │ F10-F18 │  ← K8→K7 转换
+ │ R10-R15 │  │ S10-S14 │  │ P10-P26 │  │ F10-F18 │  ← K8→K7 转换
  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘
       └──────────┬──────────────┴─────────────┘
              ▼
@@ -276,11 +410,12 @@ KiCad 8 不强制要求特定排序，元素顺序不同不影响加载。可以
    └────────┬─────────┘
             │
             ▼
-   输出: KiCad 8 或 KiCad 7 兼容文件
+   输出: KiCad 9/8/7 兼容文件
 ```
 
 > [!NOTE]
 > PCB 文件使用独立的转换模块 `pcb-converter.js`，封装文件使用 `fp-converter.js`，均共享相同的 S-expression 解析器和统一转换入口。
+> KiCad 10 → KiCad 9 的转换目前支持原理图和符号库文件（N 系列规则），PCB 和封装文件仅做文件头降级。
 
 ### 实现语言: JavaScript/Node.js
 
@@ -305,16 +440,18 @@ KiCad 8 不强制要求特定排序，元素顺序不同不影响加载。可以
 ### 风险和局限
 
 > [!WARNING]
-> - **有损转换**: 表格、规则区域、嵌入文件等 K9 特有功能在降级时**丢失**
+> - **有损转换**: 表格、规则区域、嵌入文件等 K9/K10 特有功能在降级时**丢失**
 > - ~~**符号库文件**: `.kicad_sym` 符号库文件也有版本差异，需要单独处理~~ ✅ 已实现
 > - ~~**PCB 文件**: `.kicad_pcb` 文件也有类似的版本问题~~ ✅ 已实现
 > - ~~**封装文件**: `.kicad_mod` 封装文件也需要降级处理~~ ✅ 已实现
+> - ~~**KiCad 10 支持**: 需要支持 KiCad 10 文件的降级转换~~ ✅ 已实现（原理图/符号库 N1-N8 规则）
 > - **多 Sheet 项目**: 每个 `.kicad_sch` 文件都需要单独转换
 > - **项目文件**: `.kicad_pro` 项目文件也需要版本降级处理
 > - **行长度限制**: KiCad 8 对单行长度有限制，嵌入图片的 base64 数据需逐行输出。
+> - **KiCad 10 PCB/封装**: K10 的 PCB 和封装文件目前仅做文件头降级，尚未研究详细格式差异。
 
 > [!IMPORTANT]
-> 该工具的目标是"尽力降级"——保留所有核心电路信息（连接性、元器件、值、位置），安全移除或转换 KiCad 9 新增的非关键格式特性。
+> 该工具的目标是"尽力降级"——保留所有核心电路信息（连接性、元器件、值、位置），安全移除或转换新版本新增的非关键格式特性。支持从 KiCad 10 一路降级到 KiCad 7。
 
 ---
 

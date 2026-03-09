@@ -2,8 +2,10 @@
 
 一个基于浏览器的工具，用于将 KiCad 原理图文件（`.kicad_sch`）、符号库文件（`.kicad_sym`）、PCB 文件（`.kicad_pcb`）和封装文件（`.kicad_mod`）进行版本降级转换，支持以下转换路径：
 
+- **KiCad 10 → KiCad 9**（原理图/符号库）
 - **KiCad 9 → KiCad 8**
 - **KiCad 8 → KiCad 7**
+- **KiCad 10 → KiCad 7**（链式转换：10→9→8→7）
 - **KiCad 9 → KiCad 7**（链式转换：先 9→8，再 8→7）
 
 ## 功能特性
@@ -11,11 +13,24 @@
 - **浏览器端转换**：纯前端实现，无需服务器，文件不会上传到任何地方
 - **四种文件类型**：支持 `.kicad_sch`（原理图）、`.kicad_sym`（符号库）、`.kicad_pcb`（PCB）和 `.kicad_mod`（封装）
 - **批量处理**：支持同时上传多个文件，一键转换并打包下载
-- **自动检测**：自动检测文件类型和版本，使用对应的转换规则
-- **链式降级**：KiCad 9 → KiCad 7 会自动执行两步转换
+- **自动检测**：自动检测文件类型和版本（支持 KiCad 7/8/9/10），使用对应的转换规则
+- **链式降级**：KiCad 10 → KiCad 7 会自动执行三步转换（10→9→8→7）
 - **转换日志**：显示详细的转换过程日志和警告信息
 
 ## 转换规则
+
+### 原理图 (.kicad_sch) — KiCad 10 → KiCad 9（N1-N8）
+
+| 规则 | 说明 |
+|------|------|
+| N1 | 文件头版本号降级（`version` → `20250114`，`generator_version` → `9.0`） |
+| N2 | 移除 lib_symbol 中 K10 新增属性（`in_pos_files`、`duplicate_pin_numbers_are_jumpers`） |
+| N3 | 移除 property 中的 `show_name` 和 `do_not_autoplace` 属性 |
+| N4 | property 层级的 `(hide yes)` 移入 `effects` 节点内部（K10 提升到 property 层级，K9 在 effects 内） |
+| N5 | 移除 symbol 实例中的 `(body_style ...)` 属性 |
+| N6 | `(power global)` → `(power)`（K10 新增 `global` 参数，K9 使用裸 `power`） |
+| N7 | 移除 lib_symbol 中的 `(body_styles ...)` 节点 |
+| N8 | lib_symbol 中空 pin 名 `(name "")` → `(name "~")`（K10 用空字符串，K9 用波浪号） |
 
 ### 原理图 (.kicad_sch) — KiCad 9 → KiCad 8（R1-R8）
 
@@ -140,7 +155,7 @@ npm run build
 
 - **React** + **Vite** — 前端框架与构建工具
 - **S-expression Parser** — 自定义的 KiCad S-表达式解析器（`src/lib/sexpr-parser.js`）
-- **Converter** — 基于 AST 的版本转换引擎（`src/lib/converter.js` + `src/lib/sym-converter.js` + `src/lib/pcb-converter.js` + `src/lib/fp-converter.js`）
+- **Converter** — 基于 AST 的版本转换引擎（`src/lib/converter.js` + `src/lib/sym-converter.js` + `src/lib/pcb-converter.js` + `src/lib/fp-converter.js`），支持 KiCad 10/9/8/7 链式降级
 
 ## 项目结构
 
