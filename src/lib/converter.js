@@ -40,6 +40,12 @@ import {
     PCB_VERSIONS,
 } from './pcb-converter.js';
 
+import {
+    applyFpK9toK8,
+    applyFpK8toK7,
+    FP_VERSIONS,
+} from './fp-converter.js';
+
 // --- Version Definitions ---
 
 // Schematic (.kicad_sch) versions
@@ -61,6 +67,7 @@ const FILE_TYPES = {
     SCHEMATIC: 'kicad_sch',
     SYMBOL_LIB: 'kicad_symbol_lib',
     PCB: 'kicad_pcb',
+    FOOTPRINT: 'footprint',
 };
 
 /**
@@ -81,6 +88,8 @@ export function detectVersion(input) {
         versionTable = PCB_VERSIONS;
     } else if (input.match(/^\s*\(kicad_symbol_lib\b/)) {
         versionTable = SYM_VERSIONS;
+    } else if (input.match(/^\s*\(footprint\b/)) {
+        versionTable = FP_VERSIONS;
     }
 
     // Determine which major version this corresponds to
@@ -127,16 +136,17 @@ export async function convertKicad(input, targetVersionKey) {
     const isSymbolLib = fileType === FILE_TYPES.SYMBOL_LIB;
     const isSchematic = fileType === FILE_TYPES.SCHEMATIC;
     const isPcb = fileType === FILE_TYPES.PCB;
+    const isFootprint = fileType === FILE_TYPES.FOOTPRINT;
 
-    if (!isSymbolLib && !isSchematic && !isPcb) {
-        throw new Error(`Unsupported file type: root element "${fileType}" is not kicad_sch, kicad_symbol_lib, or kicad_pcb`);
+    if (!isSymbolLib && !isSchematic && !isPcb && !isFootprint) {
+        throw new Error(`Unsupported file type: root element "${fileType}" is not kicad_sch, kicad_symbol_lib, kicad_pcb, or footprint`);
     }
 
-    const fileTypeLabel = isPcb ? 'PCB' : (isSymbolLib ? 'Symbol Library' : 'Schematic');
+    const fileTypeLabel = isFootprint ? 'Footprint' : (isPcb ? 'PCB' : (isSymbolLib ? 'Symbol Library' : 'Schematic'));
     log.push(`File type: ${fileTypeLabel}`);
 
     // Use appropriate version table
-    const versionTable = isPcb ? PCB_VERSIONS : (isSymbolLib ? SYM_VERSIONS : VERSIONS);
+    const versionTable = isFootprint ? FP_VERSIONS : (isPcb ? PCB_VERSIONS : (isSymbolLib ? SYM_VERSIONS : VERSIONS));
     const targetVersion = versionTable[targetVersionKey];
     if (!targetVersion) {
         throw new Error(`Unknown target version: ${targetVersionKey}`);
@@ -159,7 +169,9 @@ export async function convertKicad(input, targetVersionKey) {
     // Build conversion chain based on file type
     const steps = [];
     if (inputVersionNum > k8VersionNum && targetVersionNum <= k8VersionNum) {
-        if (isPcb) {
+        if (isFootprint) {
+            steps.push({ from: versionTable.KICAD9, to: versionTable.KICAD8, fn: applyFpK9toK8 });
+        } else if (isPcb) {
             steps.push({ from: versionTable.KICAD9, to: versionTable.KICAD8, fn: applyPcbK9toK8 });
         } else if (isSymbolLib) {
             steps.push({ from: versionTable.KICAD9, to: versionTable.KICAD8, fn: applySymK9toK8 });
@@ -168,7 +180,9 @@ export async function convertKicad(input, targetVersionKey) {
         }
     }
     if (inputVersionNum > k7VersionNum && targetVersionNum <= k7VersionNum) {
-        if (isPcb) {
+        if (isFootprint) {
+            steps.push({ from: versionTable.KICAD8, to: versionTable.KICAD7, fn: applyFpK8toK7 });
+        } else if (isPcb) {
             steps.push({ from: versionTable.KICAD8, to: versionTable.KICAD7, fn: applyPcbK8toK7 });
         } else if (isSymbolLib) {
             steps.push({ from: versionTable.KICAD8, to: versionTable.KICAD7, fn: applySymK8toK7 });
