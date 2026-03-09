@@ -683,10 +683,28 @@ function transformFootprintK8toK7(fpNode, stats, log, warnings) {
         const lockedValue = lockedNode.children.length > 0 ? lockedNode.children[0].value : 'yes';
         fpNode.children.splice(lockedIdx, 1);
         if (lockedValue === 'yes') {
-            // Insert 'locked' as atom right after the footprint name (position 0)
+            // Insert 'locked' as atom right after the footprint name string
             // In K7, locked appears as: (footprint "name" locked (layer ...))
-            fpNode.children.splice(0, 0, { type: 'atom', value: 'locked' });
+            const nameIdx = fpNode.children.findIndex(c => c.type === 'string');
+            const insertIdx = nameIdx >= 0 ? nameIdx + 1 : 0;
+            fpNode.children.splice(insertIdx, 0, { type: 'atom', value: 'locked' });
             stats.p16_locked++;
+        }
+    }
+
+    // P16 (fix): If 'locked' is already a bare atom but appears BEFORE the footprint name string,
+    // move it to after the name. This happens when the file already has K7-style bare 'locked'
+    // but the parser placed it before the name string in children.
+    const bareLockedIdx = fpNode.children.findIndex(
+        c => c.type === 'atom' && c.value === 'locked'
+    );
+    if (bareLockedIdx >= 0) {
+        const nameIdx = fpNode.children.findIndex(c => c.type === 'string');
+        if (nameIdx >= 0 && bareLockedIdx < nameIdx) {
+            // locked is before the name string — move it after
+            fpNode.children.splice(bareLockedIdx, 1);
+            // nameIdx shifted by -1 after removal
+            fpNode.children.splice(nameIdx, 0, { type: 'atom', value: 'locked' });
         }
     }
 
