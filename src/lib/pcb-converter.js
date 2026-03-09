@@ -38,6 +38,10 @@
  *        - (keep_end_layers yes) → bare (keep_end_layers); remove when "no"
  *        - Remove (pintype ...) and (pinfunction ...) from pads
  *   P22: (fill no) → (fill none) in graphic shapes (fp_circle, fp_rect, etc.)
+ *   P23: Remove (unlocked yes) from fp_text nodes (K7 doesn't support it)
+ *   P24: Remove (net ...) from gr_* graphical elements (K7 doesn't support net on graphics)
+ *   P25: Remove (locked yes) from gr_* graphical elements (K7 doesn't support locked on graphics)
+ *   P26: group nodes: (tstamp ...) → (id ...) and remove (locked yes)
  */
 
 import {
@@ -470,6 +474,10 @@ export async function applyPcbK8toK7(ast, log, warnings) {
         p21_pad_compat: 0,
         p21b_hide_syntax: 0,
         p22_fill_no_to_none: 0,
+        p23_unlocked_removed: 0,
+        p24_gr_net_removed: 0,
+        p25_gr_locked_removed: 0,
+        p26_group_fixed: 0,
     };
 
     // P10: Header downgrade
@@ -531,6 +539,10 @@ export async function applyPcbK8toK7(ast, log, warnings) {
     log.push(`P21 pad attributes fixed: ${stats.p21_pad_compat}`);
     log.push(`P21b hide/bold/italic syntax fixed: ${stats.p21b_hide_syntax}`);
     log.push(`P22 fill no→none converted: ${stats.p22_fill_no_to_none}`);
+    log.push(`P23 unlocked removed from fp_text: ${stats.p23_unlocked_removed}`);
+    log.push(`P24 net removed from gr_* elements: ${stats.p24_gr_net_removed}`);
+    log.push(`P25 locked removed from gr_* elements: ${stats.p25_gr_locked_removed}`);
+    log.push(`P26 group nodes fixed: ${stats.p26_group_fixed}`);
 }
 
 /**
@@ -604,10 +616,12 @@ function transformPcbK8toK7(node, stats, log, warnings) {
         applyP21PadCompat(node, stats);
     }
 
-    // P21: Also remove teardrops from vias (K7 doesn't support teardrops anywhere)
+    // P21: Also remove teardrops and (free yes) from vias
+    // K7 doesn't support teardrops anywhere, and doesn't support (free yes) on vias
     if (node.name === 'via') {
         for (let i = node.children.length - 1; i >= 0; i--) {
-            if (node.children[i].type === 'list' && node.children[i].name === 'teardrops') {
+            const child = node.children[i];
+            if (child.type === 'list' && (child.name === 'teardrops' || child.name === 'free')) {
                 node.children.splice(i, 1);
                 stats.p21_pad_compat++;
             }
@@ -616,8 +630,9 @@ function transformPcbK8toK7(node, stats, log, warnings) {
 
     // P21b: Convert (hide yes), (bold yes), (italic yes) list syntax to bare atoms
     // KiCad 8 uses list syntax, KiCad 7 uses bare keyword atoms
-    // This applies to property nodes (hide), effects nodes, and font nodes (bold, italic)
-    if (node.name === 'property' || node.name === 'effects' || node.name === 'font') {
+    // This applies to property nodes (hide), effects nodes, font nodes (bold, italic),
+    // and model nodes (hide) for 3D model visibility.
+    if (node.name === 'property' || node.name === 'effects' || node.name === 'font' || node.name === 'model') {
         const keywords = ['hide', 'bold', 'italic'];
         for (const keyword of keywords) {
             const idx = node.children.findIndex(c => c.type === 'list' && c.name === keyword);
@@ -642,6 +657,63 @@ function transformPcbK8toK7(node, stats, log, warnings) {
                 child.value = 'none';
                 stats.p22_fill_no_to_none++;
             }
+        }
+    }
+
+    // P23: Remove (unlocked yes) from fp_text nodes
+    // KiCad 8 supports (unlocked yes) on fp_text (especially fp_text user),
+    // but KiCad 7 doesn't recognize this attribute.
+    if (node.name === 'fp_text') {
+        const unlockedIdx = node.children.findIndex(
+            c => c.type === 'list' && c.name === 'unlocked'
+        );
+        if (unlockedIdx >= 0) {
+            node.children.splice(unlockedIdx, 1);
+            stats.p23_unlocked_removed++;
+        }
+    }
+
+    // P24: Remove (net ...) from top-level graphical elements
+    // KiCad 8 supports net assignment on gr_line, gr_circle, gr_arc, gr_rect, gr_poly
+    // KiCad 7 doesn't recognize (net ...) on these elements.
+    if (node.name === 'gr_line' || node.name === 'gr_circle' || node.name === 'gr_arc' || node.name === 'gr_rect' || node.name === 'gr_poly' || node.name === 'gr_text') {
+        // P24: Remove (net ...)
+        const netIdx = node.children.findIndex(
+            c => c.type === 'list' && c.name === 'net'
+        );
+        if (netIdx >= 0) {
+            node.children.splice(netIdx, 1);
+            stats.p24_gr_net_removed++;
+        }
+
+        // P25: Remove (locked yes)
+        const lockedIdx = node.children.findIndex(
+            c => c.type === 'list' && c.name === 'locked'
+        );
+        if (lockedIdx >= 0) {
+            node.children.splice(lockedIdx, 1);
+            stats.p25_gr_locked_removed++;
+        }
+    }
+
+    // P26: Fix group nodes for K7 compatibility
+    // - (tstamp ...) → (id ...) — P11 converts uuid→tstamp globally, but K7 groups use 'id'
+    // - Remove (locked yes) — K7 doesn't support locked on groups
+    if (node.name === 'group') {
+        // Find the identifier node - could be 'uuid' (not yet converted by P11) or 'tstamp' (already converted)
+        const idNode = node.children.find(c => c.type === 'list' && (c.name === 'uuid' || c.name === 'tstamp'));
+        if (idNode) {
+            idNode.name = 'id';
+            // Also ensure value is atom (not string) for K7 compatibility
+            for (const child of idNode.children) {
+                if (child.type === 'string') child.type = 'atom';
+            }
+            stats.p26_group_fixed++;
+        }
+        const lockedIdx = node.children.findIndex(c => c.type === 'list' && c.name === 'locked');
+        if (lockedIdx >= 0) {
+            node.children.splice(lockedIdx, 1);
+            stats.p26_group_fixed++;
         }
     }
 
