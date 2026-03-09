@@ -568,6 +568,31 @@ KiCad 9 在 dimension 的 `style` 节点中新增了 `(arrow_direction outward)`
 +    (keep_text_aligned yes))      ← K8 期望裸原子
 ```
 
+### PCB 差异 9: Zone 中的 `placement` 属性 ⚠️ 关键
+
+KiCad 9 在 zone 定义中新增了 `(placement ...)` 子节点，用于多通道（multi-channel）自动放置区域功能。KiCad 8 不支持此属性，解析时会报错。
+
+```diff
+;; KiCad 9 zone 定义:
+ (zone
+     (net 0)
+     (net_name "")
+     (layers "F.Cu" "B.Cu")
+     (uuid "32086486-...")
+     (name "auto-placement-area-/CH4/")
+     (hatch none 0.5)
+     (keepout ...)
++    (placement                     ← K8 不支持！
++        (enabled yes)
++        (sheetname "/CH4/")
++    )
+     (fill ...)
+     (polygon ...)
+ )
+
+;; KiCad 8: 无 (placement) 节点
+```
+
 ### PCB 差异 8: K8 → K7 格式变化
 
 KiCad 8 和 KiCad 7 之间的 PCB 格式差异更大：
@@ -587,7 +612,7 @@ KiCad 8 和 KiCad 7 之间的 PCB 格式差异更大：
 
 ## PCB 降级转换规则
 
-### K9 → K8 规则（P1-P9, P21）
+### K9 → K8 规则（P1-P9, P21-P22）
 
 | 规则 | 说明 |
 |------|------|
@@ -601,6 +626,7 @@ KiCad 8 和 KiCad 7 之间的 PCB 格式差异更大：
 | P8 | 移除 K9 专有顶层元素（`embedded_files`、`component_class`） |
 | P9 | 移除 Datasheet/Description 属性字体中的 `thickness` |
 | P21 | 移除 dimension style 中的 `(arrow_direction ...)`，`(keep_text_aligned yes)` → 裸原子 |
+| P22 | 移除 zone 中的 `(placement ...)`（多通道自动放置区域，K9 特有功能） |
 
 ### K8 → K7 规则（P10-P20）
 

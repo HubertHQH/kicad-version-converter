@@ -18,6 +18,7 @@
  *   P8: Remove K9-only top-level elements (embedded_files, component_class)
  *   P9: Remove font thickness from Datasheet/Description property fonts
  *   P21: Remove (arrow_direction) and fix (keep_text_aligned) in dimension style
+ *   P22: Remove (placement ...) from zone definitions (multi-channel auto-placement area, K9 only)
  * 
  * Conversion rules (K8 → K7): P10-P20
  *   P10: Header downgrade (version, remove generator_version, unquote generator)
@@ -132,6 +133,7 @@ export async function applyPcbK9toK8(ast, log, warnings) {
         p8_k9_elements: 0,
         p9_font_thickness: 0,
         p21_dimension_style: 0,
+        p22_zone_placement: 0,
     };
 
     // P1: Header downgrade
@@ -184,6 +186,7 @@ export async function applyPcbK9toK8(ast, log, warnings) {
     log.push(`P8 K9-only elements removed: ${stats.p8_k9_elements}`);
     log.push(`P9 Font thickness cleaned: ${stats.p9_font_thickness}`);
     log.push(`P21 Dimension style fixed: ${stats.p21_dimension_style}`);
+    log.push(`P22 Zone placement removed: ${stats.p22_zone_placement}`);
 }
 
 /**
@@ -400,6 +403,18 @@ function transformPcbK9toK8(node, stats, log, warnings) {
                     }
                 }
             }
+        }
+    }
+
+    // P22: Remove (placement ...) from zone definitions
+    // K9 adds (placement (enabled yes) (sheetname "/CHx/")) for multi-channel auto-placement areas.
+    // KiCad 8 does not support this property inside zones.
+    if (node.name === 'zone') {
+        const removed = removeAllChildren(node, 'placement');
+        if (removed > 0) {
+            stats.p22_zone_placement = (stats.p22_zone_placement || 0) + removed;
+            log.push(`P22: Removed ${removed} (placement) from zone`);
+            warnings.push(`Removed (placement) from zone - KiCad 9 multi-channel auto-placement feature`);
         }
     }
 
