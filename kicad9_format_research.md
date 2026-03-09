@@ -2,11 +2,11 @@
 
 > [!NOTE]
 > 本报告基于 KiCad 源码和实际样例文件对比分析。
-> 涵盖原理图文件（`.kicad_sch`）、符号库文件（`.kicad_sym`）和 PCB 文件（`.kicad_pcb`）三种格式。
+> 涵盖原理图文件（`.kicad_sch`）、符号库文件（`.kicad_sym`）、PCB 文件（`.kicad_pcb`）和封装文件（`.kicad_mod`）四种格式。
 
 ## 背景
 
-KiCad 使用 S-expression 格式保存原理图文件（`.kicad_sch`）、符号库文件（`.kicad_sym`）和 PCB 文件（`.kicad_pcb`）。文件头的 `version` 字段用 `YYYYMMDD` 日期格式标识。
+KiCad 使用 S-expression 格式保存原理图文件（`.kicad_sch`）、符号库文件（`.kicad_sym`）、PCB 文件（`.kicad_pcb`）和封装文件（`.kicad_mod`）。文件头的 `version` 字段用 `YYYYMMDD` 日期格式标识。
 **KiCad 只保证向后兼容（新版可打开旧版），不支持向前兼容（旧版无法打开新版）。**
 目前市面上**没有**任何现成的 KiCad 9 → KiCad 8 降级工具。
 
@@ -245,7 +245,7 @@ KiCad 8 不强制要求特定排序，元素顺序不同不影响加载。可以
 ### 核心架构
 
 ```
-输入: KiCad 9 .kicad_sch / .kicad_sym / .kicad_pcb 文件
+输入: KiCad 9 .kicad_sch / .kicad_sym / .kicad_pcb / .kicad_mod 文件
           │
           ▼
    ┌──────────────────┐
@@ -263,12 +263,12 @@ KiCad 8 不强制要求特定排序，元素顺序不同不影响加载。可以
             │
      ┌──────┴──────┐
      ▼             ▼
- ┌─────────┐  ┌──────────┐  ┌──────────┐
- │ 原理图   │  │ 符号库    │  │   PCB    │
- │ R1-R8   │  │ S1-S4   │  │ P1-P9   │  ← K9→K8 转换
- │ R10-R15 │  │ S10-S14 │  │ P10-P20 │  ← K8→K7 转换
- └────┬────┘  └────┬────┘  └────┬────┘
-      └──────────┬──────────────┘
+ ┌─────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
+ │ 原理图   │  │ 符号库    │  │   PCB    │  │  封装    │
+ │ R1-R8   │  │ S1-S4   │  │ P1-P9   │  │ F1-F4   │  ← K9→K8 转换
+ │ R10-R15 │  │ S10-S14 │  │ P10-P20 │  │ F10-F18 │  ← K8→K7 转换
+ └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘
+      └──────────┬──────────────┴─────────────┘
              ▼
    ┌──────────────────┐
    │ S-expression 序列化│  ← 保持 KiCad 缩进风格
@@ -280,7 +280,7 @@ KiCad 8 不强制要求特定排序，元素顺序不同不影响加载。可以
 ```
 
 > [!NOTE]
-> PCB 文件使用独立的转换模块 `pcb-converter.js`，但共享相同的 S-expression 解析器和统一转换入口。
+> PCB 文件使用独立的转换模块 `pcb-converter.js`，封装文件使用 `fp-converter.js`，均共享相同的 S-expression 解析器和统一转换入口。
 
 ### 实现语言: JavaScript/Node.js
 
@@ -308,6 +308,7 @@ KiCad 8 不强制要求特定排序，元素顺序不同不影响加载。可以
 > - **有损转换**: 表格、规则区域、嵌入文件等 K9 特有功能在降级时**丢失**
 > - ~~**符号库文件**: `.kicad_sym` 符号库文件也有版本差异，需要单独处理~~ ✅ 已实现
 > - ~~**PCB 文件**: `.kicad_pcb` 文件也有类似的版本问题~~ ✅ 已实现
+> - ~~**封装文件**: `.kicad_mod` 封装文件也需要降级处理~~ ✅ 已实现
 > - **多 Sheet 项目**: 每个 `.kicad_sch` 文件都需要单独转换
 > - **项目文件**: `.kicad_pro` 项目文件也需要版本降级处理
 > - **行长度限制**: KiCad 8 对单行长度有限制，嵌入图片的 base64 数据需逐行输出。
@@ -683,3 +684,122 @@ KiCad 8 和 KiCad 7 之间的 PCB 格式差异更大：
 | P24 | 移除顶层图形元素（`gr_line`/`gr_circle`/`gr_arc`/`gr_rect`/`gr_poly`/`gr_text`）中的 `(net ...)`（K7 不支持） |
 | P25 | 移除顶层图形元素（`gr_text`/`gr_line` 等）中的 `(locked yes)`（K7 不支持） |
 | P26 | `group` 节点：`(uuid/tstamp ...)` → `(id ...)`，移除 `(locked yes)`（K7 group 用 `id`） |
+
+---
+
+## 第四部分：封装 (.kicad_mod) 格式差异
+
+通过对比 `asset/kicad9/kicad-footprints-9.0.7/`、`asset/kicad8/kicad-footprints-v8/`、`asset/kicad7/kicad-footprints-v7/` 中的 `C_0402_1005Metric` 和 `USB_C_Receptacle_GCT_USB4085` 等封装文件，总结出以下三个版本之间的差异。
+
+> [!NOTE]
+> 封装文件（`.kicad_mod`）本质上是 PCB 文件中 `(footprint ...)` 节点的独立文件形式。许多差异与 PCB 格式中的 footprint 差异相同，但封装文件还有一些独有的差异（如 `stroke` → `width` 格式、通配符层名引号等）。
+
+### 三版本核心差异对照表
+
+| 差异点 | KiCad 9 | KiCad 8 | KiCad 7 |
+|--------|---------|---------|--------|
+| version | `20241229` | `20240108` | `20211014` |
+| generator | `"pcbnew"` / `"kicad-footprint-generator"` | `"pcbnew"` | `pcbnew`（无引号） |
+| generator_version | `"9.0"`（可能不存在） | `"8.0"` | ❌ 不存在 |
+| `embedded_fonts` | `(embedded_fonts no)` | ❌ 不存在 | ❌ 不存在 |
+| 参考标识 | `(property "Reference" ...)` | `(property "Reference" ...)` | `(fp_text reference ...)` |
+| 值 | `(property "Value" ...)` | `(property "Value" ...)` | `(fp_text value ...)` |
+| 额外属性 | `Datasheet`、`Description` | `Footprint`、`Datasheet`、`Description` | ❌ 不存在 |
+| ID 标识符 | `(uuid "xxx")` | `(uuid "xxx")` | `(tstamp xxx)`（无引号原子） |
+| 图形线宽 | `(stroke (width W) (type T))` | `(stroke (width W) (type T))` | `(width W)` 直接子节点 |
+| 图形填充 | `(fill no)` | `(fill no)` | `(fill none)` |
+| pad 层名 | `(layers "*.Cu" "*.Mask")` | `(layers "*.Cu" "*.Mask")` | `(layers *.Cu *.Mask)`（无引号） |
+| pad 标志 | `(remove_unused_layers no)` | `(remove_unused_layers no)` | 裸 `(remove_unused_layers)` 或不存在 |
+| hide/bold/italic | `(hide yes)` | `(hide yes)` | 裸 `hide` 原子 |
+
+### 封装差异 1: 文件头
+
+```diff
+;; KiCad 9:
+ (footprint "C_0402_1005Metric"
+     (version 20241229)
+     (generator "kicad-footprint-generator")
++    (embedded_fonts no)          ← K8 不支持
+
+;; KiCad 8:
+ (footprint "C_0402_1005Metric"
+     (version 20240108)
+     (generator "pcbnew")
+     (generator_version "8.0")   ← K7 不存在
+
+;; KiCad 7:
+-(footprint "C_0402_1005Metric" (version 20211014) (generator pcbnew)
++;; 注意: 无 generator_version，generator 无引号
+```
+
+### 封装差异 2: Reference/Value 表示方式
+
+```diff
+;; KiCad 8/9:
+ (property "Reference" "REF**"
+     (at 0 -1.16 0)
+     (layer "F.SilkS")
+     (uuid "3f001d39-...")
+     (effects ...))
+
+;; KiCad 7:
+-(fp_text reference "REF**" (at 0 -1.16) (layer "F.SilkS")
++    (effects ...)
++    (tstamp 3f001d39-...))
+```
+
+### 封装差异 3: 图形元素线宽格式 ⚠️ 关键
+
+```diff
+;; KiCad 8/9:
+ (fp_line
+     (start -0.107836 -0.36)
+     (end 0.107836 -0.36)
+-    (stroke
+-        (width 0.12)
+-        (type solid)
+-    )
+     (layer "F.SilkS")
+     (uuid "5cd5b77f-..."))
+
+;; KiCad 7:
++(fp_line (start ...) (end ...) (layer "F.SilkS") (width 0.12) (tstamp ...))
+```
+
+### 封装差异 4: pad 通配符层名引号
+
+```diff
+;; KiCad 8/9:
+ (pad "A1" thru_hole circle
+-    (layers "*.Cu" "*.Mask"))
+
+;; KiCad 7:
++(pad "A1" thru_hole circle ... (layers *.Cu *.Mask) ...)
+```
+
+---
+
+## 封装降级转换规则
+
+### K9 → K8 规则（F1-F4）
+
+| 规则 | 说明 |
+|------|------|
+| F1 | 文件头降级: `version 20241229 → 20240108`，设置 `generator_version "8.0"` |
+| F2 | 移除 `(embedded_fonts ...)` |
+| F3 | 移除 Datasheet/Description 属性字体中的 `thickness` |
+| F4 | pad teardrops 中 `(curved_edges yes/no)` → `(curve_points N)`（布尔 → 数值，yes→5, no→0） |
+
+### K8 → K7 规则（F10-F18）
+
+| 规则 | 说明 |
+|------|------|
+| F10 | 文件头降级: `version → 20211014`，移除 `generator_version`，`generator` 去引号 |
+| F11 | `(uuid "xxx")` → `(tstamp xxx)` 全局递归转换（值从 string 变 atom） |
+| F12 | `(property "Reference" ...)` → `(fp_text reference ...)`；`(property "Value" ...)` → `(fp_text value ...)` |
+| F13 | 移除 `(property "Footprint"/"Datasheet"/"Description" ...)` 及自定义属性 |
+| F14 | `(stroke (width W) (type T))` → `(width W)` — 图形元素中提取线宽，移除 stroke 包装 |
+| F15 | `(fill no)` → `(fill none)` — K7 只接受 `yes`/`none`/`solid` |
+| F16 | pad 兼容: `(remove_unused_layers yes)` → 裸标志 / `no` 时移除；移除 `(pintype)`/`(pinfunction)`/`(teardrops)` |
+| F17 | `(hide/bold/italic yes)` → 裸原子；移除 `(unlocked yes)` |
+| F18 | 通配符层名去引号: `"*.Cu"` → `*.Cu`（string → atom） |

@@ -1,6 +1,6 @@
 # KiCad Multi-Version Converter
 
-一个基于浏览器的工具，用于将 KiCad 原理图文件（`.kicad_sch`）、符号库文件（`.kicad_sym`）和 PCB 文件（`.kicad_pcb`）进行版本降级转换，支持以下转换路径：
+一个基于浏览器的工具，用于将 KiCad 原理图文件（`.kicad_sch`）、符号库文件（`.kicad_sym`）、PCB 文件（`.kicad_pcb`）和封装文件（`.kicad_mod`）进行版本降级转换，支持以下转换路径：
 
 - **KiCad 9 → KiCad 8**
 - **KiCad 8 → KiCad 7**
@@ -9,7 +9,7 @@
 ## 功能特性
 
 - **浏览器端转换**：纯前端实现，无需服务器，文件不会上传到任何地方
-- **三种文件类型**：支持 `.kicad_sch`（原理图）、`.kicad_sym`（符号库）和 `.kicad_pcb`（PCB）
+- **四种文件类型**：支持 `.kicad_sch`（原理图）、`.kicad_sym`（符号库）、`.kicad_pcb`（PCB）和 `.kicad_mod`（封装）
 - **批量处理**：支持同时上传多个文件，一键转换并打包下载
 - **自动检测**：自动检测文件类型和版本，使用对应的转换规则
 - **链式降级**：KiCad 9 → KiCad 7 会自动执行两步转换
@@ -100,6 +100,29 @@
 | P25 | 移除顶层图形元素（`gr_text`/`gr_line` 等）中的 `(locked yes)`（KiCad 7 不支持） |
 | P26 | `group` 节点：`(uuid ...)` → `(id ...)`，移除 `(locked yes)`（KiCad 7 的 group 用 `id` 不用 `tstamp`） |
 
+### 封装 (.kicad_mod) — KiCad 9 → KiCad 8（F1-F4）
+
+| 规则 | 说明 |
+|------|------|
+| F1 | 文件头版本号降级（`version` → `20240108`，`generator_version` → `8.0`） |
+| F2 | 移除 `(embedded_fonts ...)` |
+| F3 | 移除 Datasheet/Description 属性字体中的 `thickness` |
+| F4 | pad teardrops 中 `(curved_edges ...)` → `(curve_points ...)`（布尔值 → 数值） |
+
+### 封装 (.kicad_mod) — KiCad 8 → KiCad 7（F10-F18）
+
+| 规则 | 说明 |
+|------|------|
+| F10 | 文件头降级（`version` → `20211014`，移除 `generator_version`，`generator` 去引号） |
+| F11 | `(uuid "xxx")` → `(tstamp xxx)`（全局递归） |
+| F12 | `(property "Reference" ...)` → `(fp_text reference ...)`；`(property "Value" ...)` → `(fp_text value ...)` |
+| F13 | 移除 `(property "Footprint")`、`(property "Datasheet")`、`(property "Description")` 及自定义属性 |
+| F14 | `(stroke (width W) (type T))` → `(width W)`（图形元素中的线宽格式转换） |
+| F15 | `(fill no)` → `(fill none)`（KiCad 7 不接受 `no` 值） |
+| F16 | pad 属性兼容：`(remove_unused_layers yes)` → 裸标志 / `no` 时移除；移除 `(pintype)`、`(pinfunction)`、`(teardrops)` |
+| F17 | `(hide yes)` → 裸 `hide`，`(bold yes)` → 裸 `bold`，`(italic yes)` → 裸 `italic`；移除 `(unlocked yes)` |
+| F18 | pad 通配符层名去引号：`"*.Cu"` → `*.Cu`（KiCad 7 使用无引号原子） |
+
 ## 快速开始
 
 ```bash
@@ -117,7 +140,7 @@ npm run build
 
 - **React** + **Vite** — 前端框架与构建工具
 - **S-expression Parser** — 自定义的 KiCad S-表达式解析器（`src/lib/sexpr-parser.js`）
-- **Converter** — 基于 AST 的版本转换引擎（`src/lib/converter.js` + `src/lib/sym-converter.js` + `src/lib/pcb-converter.js`）
+- **Converter** — 基于 AST 的版本转换引擎（`src/lib/converter.js` + `src/lib/sym-converter.js` + `src/lib/pcb-converter.js` + `src/lib/fp-converter.js`）
 
 ## 项目结构
 
@@ -128,7 +151,8 @@ converter/
 │   │   ├── sexpr-parser.js   # S-expression 解析器和序列化器
 │   │   ├── converter.js      # 统一转换入口 + 原理图转换规则
 │   │   ├── sym-converter.js  # 符号库转换规则
-│   │   └── pcb-converter.js  # PCB 转换规则
+│   │   ├── pcb-converter.js  # PCB 转换规则
+│   │   └── fp-converter.js   # 封装转换规则
 │   ├── App.jsx               # 主应用组件（文件上传、转换、下载）
 │   └── main.jsx              # 入口文件
 ├── index.html
@@ -165,3 +189,11 @@ converter/
 - **`asset/kicad7/Symbol_v7/`** — KiCad 7 格式的符号库，共 227 个库文件
 
 三个版本包含相同的符号库内容（如 `Buffer.kicad_sym`、`power.kicad_sym`、`Device.kicad_sym` 等），可用于对比验证符号库转换的正确性。
+
+### 封装示例
+
+- **`asset/kicad9/kicad-footprints-9.0.7/`** — KiCad 9 格式的官方封装库
+- **`asset/kicad8/kicad-footprints-v8/`** — KiCad 8 格式的官方封装库
+- **`asset/kicad7/kicad-footprints-v7/`** — KiCad 7 格式的官方封装库
+
+三个版本均为 KiCad 官方封装库，包含 `Capacitor_SMD.pretty`、`Connector_USB.pretty` 等分类目录，可用于对比验证封装转换的正确性。
