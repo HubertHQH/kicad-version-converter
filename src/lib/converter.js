@@ -66,7 +66,7 @@ const FILE_TYPES = {
 /**
  * Detect the KiCad version of input text.
  * @param {string} input 
- * @returns {{ version: string, generatorVersion: string, detectedVersion: object, label: string }}
+ * @returns {{ version: string, generatorVersion: string, detectedVersion: object, label: string, isKicad9: boolean }}
  */
 export function detectVersion(input) {
     const versionMatch = input.match(/\(version\s+(\d+)\)/);
@@ -75,26 +75,34 @@ export function detectVersion(input) {
     const version = versionMatch ? versionMatch[1] : 'unknown';
     const generatorVersion = generatorMatch ? generatorMatch[1] : 'unknown';
 
+    // Detect file type to use correct version table
+    let versionTable = VERSIONS; // default: schematic
+    if (input.match(/^\s*\(kicad_pcb\b/)) {
+        versionTable = PCB_VERSIONS;
+    } else if (input.match(/^\s*\(kicad_symbol_lib\b/)) {
+        versionTable = SYM_VERSIONS;
+    }
+
     // Determine which major version this corresponds to
     const versionNum = parseInt(version);
     let detectedVersion = null;
     let label = 'Unknown';
 
-    if (versionNum > parseInt(VERSIONS.KICAD8.version)) {
-        detectedVersion = VERSIONS.KICAD9;
+    if (versionNum > parseInt(versionTable.KICAD8.version)) {
+        detectedVersion = versionTable.KICAD9;
         label = 'KiCad 9';
-    } else if (versionNum > parseInt(VERSIONS.KICAD7.version)) {
-        detectedVersion = VERSIONS.KICAD8;
+    } else if (versionNum > parseInt(versionTable.KICAD7.version)) {
+        detectedVersion = versionTable.KICAD8;
         label = 'KiCad 8';
     } else if (versionNum >= 20200310) {
         // S-expression format starts from KiCad 6
-        detectedVersion = VERSIONS.KICAD7;
+        detectedVersion = versionTable.KICAD7;
         label = 'KiCad 7';
     } else {
         label = `v${version}`;
     }
 
-    const isKicad9 = versionNum > parseInt(VERSIONS.KICAD8.version);
+    const isKicad9 = versionNum > parseInt(versionTable.KICAD8.version);
 
     return { version, generatorVersion, detectedVersion, label, isKicad9 };
 }

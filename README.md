@@ -85,13 +85,15 @@
 | P11 | `(uuid "xxx")` → `(tstamp xxx)`（全局递归） |
 | P12 | `(property "Reference" ...)` → `(fp_text reference ...)` |
 | P13 | `(property "Value" ...)` → `(fp_text value ...)` |
-| P14 | 移除 `(property "Footprint"/"Datasheet"/"Description" ...)` |
+| P14 | 移除所有 K7 不支持的 footprint property（`Footprint`/`Datasheet`/`Description` 及自定义属性如 `Champ4`） |
 | P15 | `(sheetname ...)`/`(sheetfile ...)` → `(property "Sheetname"/"Sheetfile" ...)` |
 | P16 | `(locked yes)` 子节点 → footprint 行上的裸 `locked` 原子 |
 | P17 | 移除 `general` 中的 `(legacy_teardrops ...)` |
 | P18 | 移除 `setup` 中的 `(allow_soldermask_bridges_in_footprints ...)` |
 | P19 | `pcbplotparams` 中布尔值 `yes/no` → `true/false` |
 | P20 | 移除 K8 新增 pcbplotparams（`pdf_front/back_fp_property_popups`、`plotfptext`） |
+| P21 | pad 属性兼容：`(remove_unused_layers yes)` → 裸标志 / `no` 时移除；`(keep_end_layers ...)` 同理；移除 `(pintype ...)`、`(pinfunction ...)` |
+| P21b | property/effects/font 中 `(hide yes)` → 裸 `hide`，`(bold yes)` → 裸 `bold`，`(italic yes)` → 裸 `italic` |
 
 ## 快速开始
 

@@ -629,6 +629,12 @@ KiCad 8 和 KiCad 7 之间的 PCB 格式差异更大：
 | 锁定状态 | `(locked yes)` 子节点 | footprint 行裸 `locked` 原子 |
 | generator_version | 存在 | 不存在 |
 | pcbplotparams 布尔值 | `yes`/`no` | `true`/`false` |
+| pad remove_unused_layers | `(remove_unused_layers no/yes)` | 裸 `(remove_unused_layers)` 或不存在 |
+| pad keep_end_layers | `(keep_end_layers no/yes)` | 裸 `(keep_end_layers)` 或不存在 |
+| pad pintype/pinfunction | `(pintype "...")` / `(pinfunction "...")` | 不存在 |
+| 自定义 property | 支持任意自定义属性（如 `Champ4`） | 仅支持 `ki_fp_filters`、`Sheetname`、`Sheetfile` |
+| property 中 hide | `(hide yes)` 列表形式 | 裸 `hide` 原子 |
+| effects 中 bold/italic | `(bold yes)` / `(italic yes)` | 裸 `bold` / `italic` 原子 |
 
 ---
 
@@ -651,7 +657,7 @@ KiCad 8 和 KiCad 7 之间的 PCB 格式差异更大：
 | P22 | 移除 zone 中的 `(placement ...)`（多通道自动放置区域，K9 特有功能） |
 | P23 | pad teardrops 中 `(curved_edges ...)` → `(curve_points ...)`（K9 重命名） |
 
-### K8 → K7 规则（P10-P20）
+### K8 → K7 规则（P10-P21b）
 
 | 规则 | 说明 |
 |------|------|
@@ -659,10 +665,12 @@ KiCad 8 和 KiCad 7 之间的 PCB 格式差异更大：
 | P11 | `(uuid "xxx")` → `(tstamp xxx)` 全局递归转换 |
 | P12 | `(property "Reference" ...)` → `(fp_text reference ...)` |
 | P13 | `(property "Value" ...)` → `(fp_text value ...)` |
-| P14 | 移除 Footprint/Datasheet/Description property |
+| P14 | 移除所有 K7 不支持的 footprint property（`Footprint`/`Datasheet`/`Description` 及自定义属性如 `Champ4`） |
 | P15 | `(sheetname)`/`(sheetfile)` → `(property ...)` 格式 |
 | P16 | `(locked yes)` → 裸 `locked` 原子 |
 | P17 | 移除 `(legacy_teardrops)` |
 | P18 | 移除 `(allow_soldermask_bridges_in_footprints)` |
 | P19 | pcbplotparams 布尔值 `yes/no` → `true/false` |
 | P20 | 移除 K8 新增 pcbplotparams（`pdf_front/back_fp_property_popups`、`plotfptext`） |
+| P21 | pad 属性兼容：`(remove_unused_layers yes)` → 裸标志 / `no` 时移除；`(keep_end_layers)` 同理；移除 `(pintype)`、`(pinfunction)` |
+| P21b | property/effects/font 中 `(hide yes)` → 裸 `hide`，`(bold yes)` → 裸 `bold`，`(italic yes)` → 裸 `italic` |

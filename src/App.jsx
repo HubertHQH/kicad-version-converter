@@ -43,6 +43,10 @@ function App() {
       }
     }))
 
+    // Auto-set target version: if any file is K9 → default K8, if all are K8 → default K7
+    const hasKicad9 = parsed.some(f => f.isKicad9)
+    setTargetVersion(hasKicad9 ? 'KICAD8' : 'KICAD7')
+
     setFiles(parsed)
     setResults(null)
   }, [])

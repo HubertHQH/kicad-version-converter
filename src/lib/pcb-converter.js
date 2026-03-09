@@ -33,6 +33,10 @@
  *   P18: Remove (allow_soldermask_bridges_in_footprints ...) from setup
  *   P19: pcbplotparams booleans yes/no → true/false
  *   P20: Remove K8-new pcbplotparams: pdf_front/back_fp_property_popups, plotfptext
+ *   P21: Pad attribute compatibility:
+ *        - (remove_unused_layers yes) → bare (remove_unused_layers); remove when "no"
+ *        - (keep_end_layers yes) → bare (keep_end_layers); remove when "no"
+ *        - Remove (pintype ...) and (pinfunction ...) from pads
  */
 
 import {
@@ -462,6 +466,8 @@ export async function applyPcbK8toK7(ast, log, warnings) {
         p18_soldermask_bridges: 0,
         p19_bool_conversion: 0,
         p20_k8_plotparams: 0,
+        p21_pad_compat: 0,
+        p21b_hide_syntax: 0,
     };
 
     // P10: Header downgrade
@@ -520,6 +526,8 @@ export async function applyPcbK8toK7(ast, log, warnings) {
     log.push(`P18 soldermask_bridges removed: ${stats.p18_soldermask_bridges}`);
     log.push(`P19 booleans yes/no→true/false: ${stats.p19_bool_conversion}`);
     log.push(`P20 K8 plotparams removed: ${stats.p20_k8_plotparams}`);
+    log.push(`P21 pad attributes fixed: ${stats.p21_pad_compat}`);
+    log.push(`P21b hide/bold/italic syntax fixed: ${stats.p21b_hide_syntax}`);
 }
 
 /**
@@ -588,6 +596,30 @@ function transformPcbK8toK7(node, stats, log, warnings) {
         stats.p11_uuid_to_tstamp++;
     }
 
+    // P21: Fix pad attributes for K7 compatibility
+    if (node.name === 'pad') {
+        applyP21PadCompat(node, stats);
+    }
+
+    // P21b: Convert (hide yes), (bold yes), (italic yes) list syntax to bare atoms
+    // KiCad 8 uses list syntax, KiCad 7 uses bare keyword atoms
+    // This applies to property nodes (hide), effects nodes, and font nodes (bold, italic)
+    if (node.name === 'property' || node.name === 'effects' || node.name === 'font') {
+        const keywords = ['hide', 'bold', 'italic'];
+        for (const keyword of keywords) {
+            const idx = node.children.findIndex(c => c.type === 'list' && c.name === keyword);
+            if (idx >= 0) {
+                const listNode = node.children[idx];
+                const value = listNode.children.length > 0 ? listNode.children[0].value : 'yes';
+                node.children.splice(idx, 1);
+                if (value === 'yes') {
+                    node.children.splice(idx, 0, { type: 'atom', value: keyword });
+                }
+                stats.p21b_hide_syntax++;
+            }
+        }
+    }
+
     // Process footprint-level transformations
     if (node.name === 'footprint') {
         transformFootprintK8toK7(node, stats, log, warnings);
@@ -595,6 +627,46 @@ function transformPcbK8toK7(node, stats, log, warnings) {
 
     for (const child of node.children) {
         transformPcbK8toK7(child, stats, log, warnings);
+    }
+}
+
+/**
+ * P21: Fix pad attributes for K7 compatibility
+ * - (remove_unused_layers yes) → bare (remove_unused_layers); remove when "no"
+ * - (keep_end_layers yes) → bare (keep_end_layers); remove when "no"
+ * - Remove (pintype ...) and (pinfunction ...) from pads
+ */
+function applyP21PadCompat(padNode, stats) {
+    // Convert list-with-value to bare flag or remove entirely
+    const flagAttrs = ['remove_unused_layers', 'keep_end_layers'];
+    for (const attrName of flagAttrs) {
+        const idx = padNode.children.findIndex(
+            c => c.type === 'list' && c.name === attrName
+        );
+        if (idx >= 0) {
+            const attrNode = padNode.children[idx];
+            const value = attrNode.children.length > 0 ? attrNode.children[0].value : 'yes';
+            if (value === 'yes') {
+                // Convert to bare flag: (remove_unused_layers) without arguments
+                attrNode.children = [];
+            } else {
+                // Value is "no" → remove entirely (default behavior in K7)
+                padNode.children.splice(idx, 1);
+            }
+            stats.p21_pad_compat++;
+        }
+    }
+
+    // Remove K8-only pad attributes
+    const k8OnlyAttrs = ['pintype', 'pinfunction'];
+    for (const attrName of k8OnlyAttrs) {
+        for (let i = padNode.children.length - 1; i >= 0; i--) {
+            const child = padNode.children[i];
+            if (child.type === 'list' && child.name === attrName) {
+                padNode.children.splice(i, 1);
+                stats.p21_pad_compat++;
+            }
+        }
     }
 }
 
@@ -657,7 +729,13 @@ function transformFootprintK8toK7(fpNode, stats, log, warnings) {
             fpNode.children[i] = newNode;
             stats.p12_property_to_fptext++;
         } else if (propName === 'Footprint' || propName === 'Datasheet' || propName === 'Description') {
-            // P14: Remove these properties (K7 doesn't have them in footprints)
+            // P14: Remove these standard K8 properties (K7 doesn't have them in footprints)
+            propertiesToRemove.push(i);
+            stats.p14_properties_removed++;
+        } else if (propName !== 'ki_fp_filters' && propName !== 'Sheetname' && propName !== 'Sheetfile') {
+            // P14 (extended): Remove all other custom properties
+            // K7 footprints only support: Reference, Value (→fp_text), ki_fp_filters, Sheetname, Sheetfile
+            // Custom user properties (e.g. "Champ4") with (at)(layer)(hide)(effects) are not supported
             propertiesToRemove.push(i);
             stats.p14_properties_removed++;
         }
