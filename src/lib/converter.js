@@ -5,10 +5,12 @@
  *   .kicad_sch (Schematic), .kicad_sym (Symbol Library), .kicad_pcb (PCB)
  * 
  * Conversion paths:
+ *   KiCad 10 → KiCad 9
  *   KiCad 9 → KiCad 8
  *   KiCad 8 → KiCad 7
- *   KiCad 9 → KiCad 7 (chained: 9→8→7)
+ *   KiCad 10 → KiCad 7 (chained: 10→9→8→7)
  * 
+ * Schematic conversion rules (K10 → K9): N1-N8
  * Schematic conversion rules (K9 → K8): R1-R8
  * Schematic conversion rules (K8 → K7): R10-R15
  * Symbol library conversion rules (K9 → K8): S1-S4
@@ -53,6 +55,7 @@ const VERSIONS = {
     KICAD7: { version: '20230121', generatorVersion: null, label: 'KiCad 7' },
     KICAD8: { version: '20231120', generatorVersion: '8.0', label: 'KiCad 8' },
     KICAD9: { version: '20250114', generatorVersion: '9.0', label: 'KiCad 9' },
+    KICAD10: { version: '20260101', generatorVersion: '10.0', label: 'KiCad 10' },
 };
 
 // Symbol Library (.kicad_sym) versions (different version numbers)
@@ -60,6 +63,7 @@ const SYM_VERSIONS = {
     KICAD7: { version: '20220914', generatorVersion: null, label: 'KiCad 7' },
     KICAD8: { version: '20231120', generatorVersion: '8.0', label: 'KiCad 8' },
     KICAD9: { version: '20241209', generatorVersion: '9.0', label: 'KiCad 9' },
+    KICAD10: { version: '20260101', generatorVersion: '10.0', label: 'KiCad 10' },
 };
 
 // File types
@@ -97,10 +101,17 @@ export function detectVersion(input) {
     let detectedVersion = null;
     let label = 'Unknown';
 
-    if (versionNum > parseInt(versionTable.KICAD8.version)) {
+    const k9VersionNum = parseInt(versionTable.KICAD9.version);
+    const k8VersionNum = parseInt(versionTable.KICAD8.version);
+    const k7VersionNum = parseInt(versionTable.KICAD7.version);
+
+    if (versionNum > k9VersionNum) {
+        detectedVersion = versionTable.KICAD10;
+        label = 'KiCad 10';
+    } else if (versionNum > k8VersionNum) {
         detectedVersion = versionTable.KICAD9;
         label = 'KiCad 9';
-    } else if (versionNum > parseInt(versionTable.KICAD7.version)) {
+    } else if (versionNum > k7VersionNum) {
         detectedVersion = versionTable.KICAD8;
         label = 'KiCad 8';
     } else if (versionNum >= 20200310) {
@@ -111,9 +122,10 @@ export function detectVersion(input) {
         label = `v${version}`;
     }
 
-    const isKicad9 = versionNum > parseInt(versionTable.KICAD8.version);
+    const isKicad10 = versionNum > k9VersionNum;
+    const isKicad9 = versionNum > k8VersionNum;
 
-    return { version, generatorVersion, detectedVersion, label, isKicad9 };
+    return { version, generatorVersion, detectedVersion, label, isKicad9, isKicad10 };
 }
 
 /**
@@ -159,6 +171,7 @@ export async function convertKicad(input, targetVersionKey) {
     // Determine input major version
     const inputVersionNum = parseInt(inputVersion);
     const targetVersionNum = parseInt(targetVersion.version);
+    const k9VersionNum = parseInt(versionTable.KICAD9.version);
     const k8VersionNum = parseInt(versionTable.KICAD8.version);
     const k7VersionNum = parseInt(versionTable.KICAD7.version);
 
@@ -168,6 +181,20 @@ export async function convertKicad(input, targetVersionKey) {
 
     // Build conversion chain based on file type
     const steps = [];
+
+    // K10 → K9 step
+    if (inputVersionNum > k9VersionNum && targetVersionNum <= k9VersionNum) {
+        if (isSchematic) {
+            steps.push({ from: versionTable.KICAD10, to: versionTable.KICAD9, fn: applyK10toK9 });
+        } else if (isSymbolLib) {
+            steps.push({ from: versionTable.KICAD10, to: versionTable.KICAD9, fn: applyK10toK9 });
+        } else {
+            // For PCB/Footprint K10 support not yet implemented, fallback to header-only
+            steps.push({ from: versionTable.KICAD10, to: versionTable.KICAD9, fn: applyK10toK9 });
+        }
+    }
+
+    // K9 → K8 step
     if (inputVersionNum > k8VersionNum && targetVersionNum <= k8VersionNum) {
         if (isFootprint) {
             steps.push({ from: versionTable.KICAD9, to: versionTable.KICAD8, fn: applyFpK9toK8 });
@@ -179,6 +206,8 @@ export async function convertKicad(input, targetVersionKey) {
             steps.push({ from: versionTable.KICAD9, to: versionTable.KICAD8, fn: applyK9toK8 });
         }
     }
+
+    // K8 → K7 step
     if (inputVersionNum > k7VersionNum && targetVersionNum <= k7VersionNum) {
         if (isFootprint) {
             steps.push({ from: versionTable.KICAD8, to: versionTable.KICAD7, fn: applyFpK8toK7 });
@@ -218,6 +247,145 @@ export async function convertKicad(input, targetVersionKey) {
  */
 export async function convertKicad9to8(input) {
     return convertKicad(input, 'KICAD8');
+}
+
+// ============================================================
+//  KiCad 10 → KiCad 9 Conversion (N-series rules)
+// ============================================================
+
+async function applyK10toK9(ast, log, warnings) {
+    const stats = {
+        n1_header: false,
+        n2_lib_symbol_attrs: 0,
+        n3_property_attrs: 0,
+        n4_hide_moved: 0,
+        n5_body_style: 0,
+        n6_power_global: 0,
+        n7_body_styles: 0,
+        n8_pin_name_empty: 0,
+    };
+
+    // N1: Header downgrade
+    setChildValue(ast, 'version', VERSIONS.KICAD9.version);
+    setChildValue(ast, 'generator_version', VERSIONS.KICAD9.generatorVersion);
+    stats.n1_header = true;
+    log.push(`N1: Version → ${VERSIONS.KICAD9.version}, generator_version → "${VERSIONS.KICAD9.generatorVersion}"`);
+
+    // N2-N8: Recursive transformation
+    transformK10toK9(ast, stats, log, warnings, false);
+
+    // Summary
+    log.push('--- K10→K9 Summary ---');
+    log.push(`N1 Header downgraded: ${stats.n1_header ? 'Yes' : 'No'}`);
+    log.push(`N2 lib_symbol attrs removed: ${stats.n2_lib_symbol_attrs}`);
+    log.push(`N3 property show_name/do_not_autoplace removed: ${stats.n3_property_attrs}`);
+    log.push(`N4 property-level hide moved into effects: ${stats.n4_hide_moved}`);
+    log.push(`N5 body_style removed from instances: ${stats.n5_body_style}`);
+    log.push(`N6 power global → power: ${stats.n6_power_global}`);
+    log.push(`N7 body_styles removed from lib_symbols: ${stats.n7_body_styles}`);
+    log.push(`N8 empty pin names → tilde: ${stats.n8_pin_name_empty}`);
+}
+
+/**
+ * Recursively transform K10 AST nodes to K9.
+ * @param {boolean} insideLibSymbol - true when traversing nodes under lib_symbols
+ */
+function transformK10toK9(node, stats, log, warnings, insideLibSymbol) {
+    if (!node || node.type !== 'list') return;
+
+    // Track if we're inside a lib_symbol definition (top-level symbol inside lib_symbols)
+    const isLibSymbolsContainer = node.name === 'lib_symbols';
+    const isTopLibSymbol = insideLibSymbol || isLibSymbolsContainer;
+
+    // N2: Remove K10-only lib_symbol attributes (in_pos_files, duplicate_pin_numbers_are_jumpers)
+    // These appear on top-level symbol definitions inside lib_symbols  
+    if (node.name === 'symbol' && node.children.length > 0) {
+        // Check if this is a lib_symbol definition (direct child of lib_symbols or has sub-symbols)
+        const hasInPosFiles = node.children.some(c => c.type === 'list' && c.name === 'in_pos_files');
+        if (hasInPosFiles) {
+            const r1 = removeAllChildren(node, 'in_pos_files');
+            const r2 = removeAllChildren(node, 'duplicate_pin_numbers_are_jumpers');
+            stats.n2_lib_symbol_attrs += r1 + r2;
+        }
+    }
+
+    // N3: Remove show_name and do_not_autoplace from property nodes
+    if (node.name === 'property') {
+        const r1 = removeAllChildren(node, 'show_name');
+        const r2 = removeAllChildren(node, 'do_not_autoplace');
+        stats.n3_property_attrs += r1 + r2;
+
+        // N4: Move property-level (hide yes) into effects node
+        // In K10: (property "X" ... (hide yes) (effects ...))
+        // In K9:  (property "X" ... (effects ... (hide yes)))
+        const hideIdx = node.children.findIndex(c => c.type === 'list' && c.name === 'hide');
+        if (hideIdx >= 0) {
+            const hideNode = node.children[hideIdx];
+            const hideValue = hideNode.children.length > 0 ? hideNode.children[0].value : 'yes';
+            // Remove from property level
+            node.children.splice(hideIdx, 1);
+            // Add inside effects node
+            if (hideValue === 'yes') {
+                const effectsNode = findChild(node, 'effects');
+                if (effectsNode) {
+                    effectsNode.children.push({
+                        type: 'list',
+                        name: 'hide',
+                        children: [{ type: 'atom', value: 'yes' }],
+                    });
+                    stats.n4_hide_moved++;
+                }
+            }
+        }
+    }
+
+    // N5: Remove body_style from symbol instances (not lib_symbol definitions)
+    // body_style appears on placed symbol instances, not on sub-symbol defs
+    if (node.name === 'symbol' && !isLibSymbolsContainer) {
+        // Check if this is a symbol instance (has lib_id child) vs lib_symbol definition
+        const hasLibId = node.children.some(c => c.type === 'list' && c.name === 'lib_id');
+        if (hasLibId) {
+            const removed = removeAllChildren(node, 'body_style');
+            if (removed > 0) {
+                stats.n5_body_style += removed;
+            }
+        }
+    }
+
+    // N6: Convert (power global) → (power)
+    // K10 uses (power global), K9 uses bare (power) 
+    if (node.name === 'power') {
+        // Remove the 'global' atom child
+        const globalIdx = node.children.findIndex(c => c.type === 'atom' && c.value === 'global');
+        if (globalIdx >= 0) {
+            node.children.splice(globalIdx, 1);
+            stats.n6_power_global++;
+        }
+    }
+
+    // N7: Remove body_styles from lib_symbol definitions
+    if (node.name === 'symbol') {
+        const removed = removeAllChildren(node, 'body_styles');
+        if (removed > 0) {
+            stats.n7_body_styles += removed;
+        }
+    }
+
+    // N8: Convert empty pin names to tilde in lib_symbol definitions
+    // K10 uses (name "") for unnamed pins, K9 uses (name "~")
+    if (node.name === 'name' && insideLibSymbol) {
+        if (node.children.length > 0) {
+            const nameChild = node.children[0];
+            if ((nameChild.type === 'string' || nameChild.type === 'atom') && nameChild.value === '') {
+                nameChild.value = '~';
+                stats.n8_pin_name_empty++;
+            }
+        }
+    }
+
+    for (const child of node.children) {
+        transformK10toK9(child, stats, log, warnings, isTopLibSymbol);
+    }
 }
 
 // ============================================================

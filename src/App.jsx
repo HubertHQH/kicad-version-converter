@@ -11,6 +11,7 @@ function App() {
   const fileInputRef = useRef(null)
 
   const targetOptions = [
+    { key: 'KICAD9', label: 'KiCad 9', version: '20250114' },
     { key: 'KICAD8', label: 'KiCad 8', version: '20231120' },
     { key: 'KICAD7', label: 'KiCad 7', version: '20230121' },
   ]
@@ -37,6 +38,7 @@ function App() {
         version: info.version,
         generatorVersion: info.generatorVersion,
         label: info.label,
+        isKicad10: info.isKicad10,
         isKicad9: info.isKicad9,
         fileType: isFootprint ? 'Footprint' : (isPcb ? 'PCB' : (isSymLib ? 'Symbol Library' : 'Schematic')),
         status: 'pending',
@@ -44,9 +46,10 @@ function App() {
       }
     }))
 
-    // Auto-set target version: if any file is K9 → default K8, if all are K8 → default K7
+    // Auto-set target version: if any file is K10 → default K9, if K9 → default K8, else K7
+    const hasKicad10 = parsed.some(f => f.isKicad10)
     const hasKicad9 = parsed.some(f => f.isKicad9)
-    setTargetVersion(hasKicad9 ? 'KICAD8' : 'KICAD7')
+    setTargetVersion(hasKicad10 ? 'KICAD9' : (hasKicad9 ? 'KICAD8' : 'KICAD7'))
 
     setFiles(parsed)
     setResults(null)
@@ -142,6 +145,7 @@ function App() {
   }
 
   const getVersionClass = (label) => {
+    if (label === 'KiCad 10') return 'k10'
     if (label === 'KiCad 9') return 'k9'
     if (label === 'KiCad 8') return 'k8'
     if (label === 'KiCad 7') return 'k7'
@@ -158,9 +162,9 @@ function App() {
         </div>
         <p className="app-subtitle">Convert KiCad schematics, symbol libraries, PCBs &amp; footprints between versions</p>
         <div className="version-badges">
-          <span className="version-badge from">KiCad 9 / 8</span>
+          <span className="version-badge from">KiCad 10 / 9 / 8</span>
           <span className="version-arrow">→</span>
-          <span className="version-badge to">KiCad 8 / 7</span>
+          <span className="version-badge to">KiCad 9 / 8 / 7</span>
         </div>
       </header>
 
@@ -342,7 +346,7 @@ function App() {
             <div className="log-container">
               {results.logs.map((line, i) => {
                 let className = 'log-line'
-                if (line.startsWith('R')) className += ' rule'
+                if (line.startsWith('R') || line.startsWith('N')) className += ' rule'
                 else if (line.startsWith('WARNING') || line.includes('WARNING')) className += ' warning'
                 else if (line.startsWith('ERROR')) className += ' error'
                 else if (line.startsWith('---')) className += ' summary'
