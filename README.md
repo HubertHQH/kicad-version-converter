@@ -56,6 +56,18 @@
 | R14 | `(fields_autoplaced yes)` → `(fields_autoplaced)`（移除值参数）；移除 `(dnp)` 节点 |
 | R15 | 嵌入图片非 PNG 格式（如 BMP）自动转换为 PNG（使用 Canvas API，KiCad 7 仅支持 PNG） |
 
+### 符号库 (.kicad_sym) — KiCad 10 → KiCad 9（NS1-NS8）
+
+| 规则 | 说明 |
+|------|------|
+| NS1 | 文件头版本号降级（`version` → `20241209`，`generator_version` → `9.0`） |
+| NS2 | 移除 K10 新增属性（`in_pos_files`、`duplicate_pin_numbers_are_jumpers`） |
+| NS3 | 移除 property 中的 `show_name` 和 `do_not_autoplace` 属性 |
+| NS4 | property 层级的 `(hide yes)` 移入 `effects` 节点内部 |
+| NS6 | `(power global)` → `(power)`（K10 新增 `global` 参数，K9 使用裸 `power`） |
+| NS7 | 移除 symbol 中的 `(body_styles ...)` 节点 |
+| NS8 | 空 pin 名 `(name "")` → `(name "~")`（K10 用空字符串，K9 用波浪号） |
+
 ### 符号库 (.kicad_sym) — KiCad 9 → KiCad 8（S1-S4）
 
 | 规则 | 说明 |
@@ -204,6 +216,8 @@ converter/
 - **`asset/kicad7/Symbol_v7/`** — KiCad 7 格式的符号库，共 227 个库文件
 
 三个版本包含相同的符号库内容（如 `Buffer.kicad_sym`、`power.kicad_sym`、`Device.kicad_sym` 等），可用于对比验证符号库转换的正确性。
+
+- **`asset/kicad10/kicad-symbols-10.0.0-rc2/`** — KiCad 10 格式的符号库（`.kicad_symdir` 目录格式，每个符号独立文件）
 
 ### 封装示例
 

@@ -398,7 +398,7 @@ KiCad 8 不强制要求特定排序，元素顺序不同不影响加载。可以
      ▼             ▼
  ┌─────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
  │ 原理图   │  │ 符号库    │  │   PCB    │  │  封装    │
- │ N1-N8   │  │ N1-N8   │  │         │  │         │  ← K10→K9 转换
+ │ N1-N8   │  │ NS1-NS8 │  │         │  │         │  ← K10→K9 转换
  │ R1-R8   │  │ S1-S4   │  │ P1-P9   │  │ F1-F4   │  ← K9→K8 转换
  │ R10-R15 │  │ S10-S14 │  │ P10-P26 │  │ F10-F18 │  ← K8→K7 转换
  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘
@@ -415,7 +415,7 @@ KiCad 8 不强制要求特定排序，元素顺序不同不影响加载。可以
 
 > [!NOTE]
 > PCB 文件使用独立的转换模块 `pcb-converter.js`，封装文件使用 `fp-converter.js`，均共享相同的 S-expression 解析器和统一转换入口。
-> KiCad 10 → KiCad 9 的转换目前支持原理图和符号库文件（N 系列规则），PCB 和封装文件仅做文件头降级。
+> KiCad 10 → KiCad 9 的转换支持原理图文件（N 系列规则）和符号库文件（NS 系列规则），PCB 和封装文件仅做文件头降级。
 
 ### 实现语言: JavaScript/Node.js
 
@@ -444,7 +444,7 @@ KiCad 8 不强制要求特定排序，元素顺序不同不影响加载。可以
 > - ~~**符号库文件**: `.kicad_sym` 符号库文件也有版本差异，需要单独处理~~ ✅ 已实现
 > - ~~**PCB 文件**: `.kicad_pcb` 文件也有类似的版本问题~~ ✅ 已实现
 > - ~~**封装文件**: `.kicad_mod` 封装文件也需要降级处理~~ ✅ 已实现
-> - ~~**KiCad 10 支持**: 需要支持 KiCad 10 文件的降级转换~~ ✅ 已实现（原理图/符号库 N1-N8 规则）
+> - ~~**KiCad 10 支持**: 需要支持 KiCad 10 文件的降级转换~~ ✅ 已实现（原理图 N1-N8 规则，符号库 NS1-NS8 规则）
 > - **多 Sheet 项目**: 每个 `.kicad_sch` 文件都需要单独转换
 > - **项目文件**: `.kicad_pro` 项目文件也需要版本降级处理
 > - **行长度限制**: KiCad 8 对单行长度有限制，嵌入图片的 base64 数据需逐行输出。
@@ -456,6 +456,102 @@ KiCad 8 不强制要求特定排序，元素顺序不同不影响加载。可以
 ---
 
 ## 第二部分：符号库 (.kicad_sym) 格式差异
+
+### 2.0 KiCad 10 → KiCad 9 符号库格式差异
+
+通过对比 `asset/kicad10/kicad-symbols-10.0.0-rc2/` 和 `asset/kicad9/Symbol_v9/` 中的符号文件（如 `Device/R.kicad_sym`、`power/+1V1.kicad_sym`），发现以下差异：
+
+> [!NOTE]
+> KiCad 10 符号库使用新的 `.kicad_symdir` 目录格式（每个符号独立文件），但单个符号文件的根节点仍为 `(kicad_symbol_lib ...)`。符号库的 K10→K9 格式差异与原理图中 lib_symbol 的差异高度一致。
+
+#### 符号库 K10 差异 1: 文件头版本号
+
+```diff
+- (kicad_symbol_lib (version 20241209) (generator "kicad_symbol_editor") (generator_version "9.0"))
++ (kicad_symbol_lib (version 20251024) (generator "kicad_symbol_editor") (generator_version "10.0"))
+```
+
+#### 符号库 K10 差异 2: 新增 `in_pos_files` 和 `duplicate_pin_numbers_are_jumpers`
+
+```diff
+ (symbol "R"
++    (in_pos_files yes)
++    (duplicate_pin_numbers_are_jumpers no)
+     (exclude_from_sim no)
+     (in_bom yes)
+     (on_board yes)
+     ...)
+```
+
+#### 符号库 K10 差异 3: property 新增 `show_name` 和 `do_not_autoplace`
+
+```diff
+ (property "Reference" "R"
+     (at 2.032 0 90)
++    (show_name no)
++    (do_not_autoplace no)
+     (effects ...))
+```
+
+#### 符号库 K10 差异 4: property 层级的 `hide` 位置变化 ⚠️ 关键
+
+```
+;; KiCad 10:
+(property "Footprint" ""
+    (at -1.778 0 90)
+    (show_name no)
+    (do_not_autoplace no)
+    (hide yes)
+    (effects
+        (font (size 1.27 1.27))
+    ))
+
+;; KiCad 9:
+(property "Footprint" ""
+    (at -1.778 0 90)
+    (effects
+        (font (size 1.27 1.27))
+        (hide yes)
+    ))
+```
+
+#### 符号库 K10 差异 5: `(power global)` 代替 `(power)` ⚠️ 关键
+
+```diff
+;; KiCad 10 power symbol:
++(power global)
+
+;; KiCad 9:
+-(power)
+```
+
+#### 符号库 K10 差异 6: 空 pin 名称表示方式
+
+```diff
+;; KiCad 10:
+-(name "" (effects ...))
+
+;; KiCad 9:
++(name "~" (effects ...))
+```
+
+---
+
+### 符号库 K10 → K9 降级转换规则（NS1-NS8）
+
+| 规则 | 说明 |
+|------|------|
+| NS1 | 文件头降级: `version 20251024 → 20241209`，`generator_version "10.0" → "9.0"` |
+| NS2 | 移除 symbol 中的 `(in_pos_files ...)`、`(duplicate_pin_numbers_are_jumpers ...)` |
+| NS3 | 移除 property 中的 `(show_name)` 和 `(do_not_autoplace)` |
+| NS4 | property 层级 `(hide yes)` → 移入 `effects` 内部 |
+| NS6 | `(power global)` → `(power)`（移除 `global` 参数） |
+| NS7 | 移除 symbol 中的 `(body_styles ...)` 节点 |
+| NS8 | pin 名 `(name "")` → `(name "~")`（空字符串 → 波浪号） |
+
+---
+
+### 2.1 KiCad 9/8/7 符号库格式差异
 
 通过对比 `asset/kicad9/Symbol_v9/`、`asset/kicad8/Symbol_v8/`、`asset/kicad7/Symbol_v7/` 中的 `Buffer.kicad_sym` 和 `power.kicad_sym` 样例文件，总结出以下三个版本之间的差异。
 

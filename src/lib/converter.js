@@ -13,6 +13,7 @@
  * Schematic conversion rules (K10 → K9): N1-N8
  * Schematic conversion rules (K9 → K8): R1-R8
  * Schematic conversion rules (K8 → K7): R10-R15
+ * Symbol library conversion rules (K10 → K9): NS1-NS8
  * Symbol library conversion rules (K9 → K8): S1-S4
  * Symbol library conversion rules (K8 → K7): S10-S14
  * PCB conversion rules (K9 → K8): P1-P9
@@ -32,8 +33,10 @@ import {
 } from './sexpr-parser.js';
 
 import {
+    applySymK10toK9,
     applySymK9toK8,
     applySymK8toK7,
+    SYM_VERSIONS,
 } from './sym-converter.js';
 
 import {
@@ -58,13 +61,7 @@ const VERSIONS = {
     KICAD10: { version: '20260101', generatorVersion: '10.0', label: 'KiCad 10' },
 };
 
-// Symbol Library (.kicad_sym) versions (different version numbers)
-const SYM_VERSIONS = {
-    KICAD7: { version: '20220914', generatorVersion: null, label: 'KiCad 7' },
-    KICAD8: { version: '20231120', generatorVersion: '8.0', label: 'KiCad 8' },
-    KICAD9: { version: '20241209', generatorVersion: '9.0', label: 'KiCad 9' },
-    KICAD10: { version: '20260101', generatorVersion: '10.0', label: 'KiCad 10' },
-};
+// SYM_VERSIONS imported from sym-converter.js
 
 // File types
 const FILE_TYPES = {
@@ -187,7 +184,7 @@ export async function convertKicad(input, targetVersionKey) {
         if (isSchematic) {
             steps.push({ from: versionTable.KICAD10, to: versionTable.KICAD9, fn: applyK10toK9 });
         } else if (isSymbolLib) {
-            steps.push({ from: versionTable.KICAD10, to: versionTable.KICAD9, fn: applyK10toK9 });
+            steps.push({ from: versionTable.KICAD10, to: versionTable.KICAD9, fn: applySymK10toK9 });
         } else {
             // For PCB/Footprint K10 support not yet implemented, fallback to header-only
             steps.push({ from: versionTable.KICAD10, to: versionTable.KICAD9, fn: applyK10toK9 });

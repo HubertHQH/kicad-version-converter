@@ -2,9 +2,19 @@
  * KiCad Symbol Library (.kicad_sym) Version Converter
  * 
  * Supports chain-based downgrade conversions for symbol libraries:
+ *   KiCad 10 → KiCad 9
  *   KiCad 9 → KiCad 8
  *   KiCad 8 → KiCad 7
- *   KiCad 9 → KiCad 7 (chained: 9→8→7)
+ *   KiCad 10 → KiCad 7 (chained: 10→9→8→7)
+ * 
+ * Conversion rules (K10 → K9):
+ *   NS1: Header version/generator downgrade
+ *   NS2: Remove K10-only attrs (in_pos_files, duplicate_pin_numbers_are_jumpers)
+ *   NS3: Remove show_name/do_not_autoplace from properties
+ *   NS4: Move property-level (hide yes) into effects
+ *   NS6: Convert (power global) → (power)
+ *   NS7: Remove body_styles from symbols
+ *   NS8: Convert empty pin names to tilde
  * 
  * Conversion rules (K9 → K8):
  *   S1: Header version/generator downgrade
@@ -31,11 +41,124 @@ import {
 
 // --- Version Definitions (Symbol Library specific) ---
 
-const SYM_VERSIONS = {
+export const SYM_VERSIONS = {
     KICAD7: { version: '20220914', generatorVersion: null, label: 'KiCad 7' },
     KICAD8: { version: '20231120', generatorVersion: '8.0', label: 'KiCad 8' },
     KICAD9: { version: '20241209', generatorVersion: '9.0', label: 'KiCad 9' },
+    KICAD10: { version: '20251024', generatorVersion: '10.0', label: 'KiCad 10' },
 };
+
+// ============================================================
+//  KiCad 10 → KiCad 9 Conversion (Symbol Library, NS-series rules)
+// ============================================================
+
+export async function applySymK10toK9(ast, log, warnings) {
+    const stats = {
+        ns1_header: false,
+        ns2_lib_symbol_attrs: 0,
+        ns3_property_attrs: 0,
+        ns4_hide_moved: 0,
+        ns6_power_global: 0,
+        ns7_body_styles: 0,
+        ns8_pin_name_empty: 0,
+    };
+
+    // NS1: Header downgrade
+    setChildValue(ast, 'version', SYM_VERSIONS.KICAD9.version);
+    setChildValue(ast, 'generator_version', SYM_VERSIONS.KICAD9.generatorVersion);
+    stats.ns1_header = true;
+    log.push(`NS1: Version → ${SYM_VERSIONS.KICAD9.version}, generator_version → "${SYM_VERSIONS.KICAD9.generatorVersion}"`);
+
+    // NS2-NS8: Recursive transformation
+    transformSymK10toK9(ast, stats, log, warnings);
+
+    // Summary
+    log.push('--- K10→K9 Symbol Library Summary ---');
+    log.push(`NS1 Header downgraded: ${stats.ns1_header ? 'Yes' : 'No'}`);
+    log.push(`NS2 lib_symbol attrs removed: ${stats.ns2_lib_symbol_attrs}`);
+    log.push(`NS3 property show_name/do_not_autoplace removed: ${stats.ns3_property_attrs}`);
+    log.push(`NS4 property-level hide moved into effects: ${stats.ns4_hide_moved}`);
+    log.push(`NS6 power global → power: ${stats.ns6_power_global}`);
+    log.push(`NS7 body_styles removed: ${stats.ns7_body_styles}`);
+    log.push(`NS8 empty pin names → tilde: ${stats.ns8_pin_name_empty}`);
+}
+
+function transformSymK10toK9(node, stats, log, warnings) {
+    if (!node || node.type !== 'list') return;
+
+    // NS2: Remove K10-only lib_symbol attributes (in_pos_files, duplicate_pin_numbers_are_jumpers)
+    if (node.name === 'symbol' && node.children.length > 0) {
+        const hasInPosFiles = node.children.some(c => c.type === 'list' && c.name === 'in_pos_files');
+        if (hasInPosFiles) {
+            const r1 = removeAllChildren(node, 'in_pos_files');
+            const r2 = removeAllChildren(node, 'duplicate_pin_numbers_are_jumpers');
+            stats.ns2_lib_symbol_attrs += r1 + r2;
+        }
+    }
+
+    // NS3: Remove show_name and do_not_autoplace from property nodes
+    if (node.name === 'property') {
+        const r1 = removeAllChildren(node, 'show_name');
+        const r2 = removeAllChildren(node, 'do_not_autoplace');
+        stats.ns3_property_attrs += r1 + r2;
+
+        // NS4: Move property-level (hide yes) into effects node
+        // In K10: (property "X" ... (hide yes) (effects ...))
+        // In K9:  (property "X" ... (effects ... (hide yes)))
+        const hideIdx = node.children.findIndex(c => c.type === 'list' && c.name === 'hide');
+        if (hideIdx >= 0) {
+            const hideNode = node.children[hideIdx];
+            const hideValue = hideNode.children.length > 0 ? hideNode.children[0].value : 'yes';
+            // Remove from property level
+            node.children.splice(hideIdx, 1);
+            // Add inside effects node
+            if (hideValue === 'yes') {
+                const effectsNode = findChild(node, 'effects');
+                if (effectsNode) {
+                    effectsNode.children.push({
+                        type: 'list',
+                        name: 'hide',
+                        children: [{ type: 'atom', value: 'yes' }],
+                    });
+                    stats.ns4_hide_moved++;
+                }
+            }
+        }
+    }
+
+    // NS6: Convert (power global) → (power)
+    if (node.name === 'power') {
+        const globalIdx = node.children.findIndex(c => c.type === 'atom' && c.value === 'global');
+        if (globalIdx >= 0) {
+            node.children.splice(globalIdx, 1);
+            stats.ns6_power_global++;
+        }
+    }
+
+    // NS7: Remove body_styles from symbols
+    if (node.name === 'symbol') {
+        const removed = removeAllChildren(node, 'body_styles');
+        if (removed > 0) {
+            stats.ns7_body_styles += removed;
+        }
+    }
+
+    // NS8: Convert empty pin names to tilde
+    // K10 uses (name "") for unnamed pins, K9 uses (name "~")
+    if (node.name === 'name') {
+        if (node.children.length > 0) {
+            const nameChild = node.children[0];
+            if ((nameChild.type === 'string' || nameChild.type === 'atom') && nameChild.value === '') {
+                nameChild.value = '~';
+                stats.ns8_pin_name_empty++;
+            }
+        }
+    }
+
+    for (const child of node.children) {
+        transformSymK10toK9(child, stats, log, warnings);
+    }
+}
 
 // ============================================================
 //  KiCad 9 → KiCad 8 Conversion (Symbol Library)
