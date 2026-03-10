@@ -444,11 +444,11 @@ KiCad 8 不强制要求特定排序，元素顺序不同不影响加载。可以
 > - ~~**符号库文件**: `.kicad_sym` 符号库文件也有版本差异，需要单独处理~~ ✅ 已实现
 > - ~~**PCB 文件**: `.kicad_pcb` 文件也有类似的版本问题~~ ✅ 已实现
 > - ~~**封装文件**: `.kicad_mod` 封装文件也需要降级处理~~ ✅ 已实现
-> - ~~**KiCad 10 支持**: 需要支持 KiCad 10 文件的降级转换~~ ✅ 已实现（原理图 N1-N8 规则，符号库 NS1-NS8 规则）
+> - ~~**KiCad 10 支持**: 需要支持 KiCad 10 文件的降级转换~~ ✅ 已实现（原理图 N1-N8 规则，符号库 NS1-NS8 规则，PCB NP1-NP10 规则）
 > - **多 Sheet 项目**: 每个 `.kicad_sch` 文件都需要单独转换
 > - **项目文件**: `.kicad_pro` 项目文件也需要版本降级处理
 > - **行长度限制**: KiCad 8 对单行长度有限制，嵌入图片的 base64 数据需逐行输出。
-> - **KiCad 10 PCB/封装**: K10 的 PCB 和封装文件目前仅做文件头降级，尚未研究详细格式差异。
+> - ~~**KiCad 10 PCB/封装**: K10 的 PCB 和封装文件目前仅做文件头降级，尚未研究详细格式差异。~~ ✅ PCB 已实现（NP1-NP10），封装文件尚未实现。
 
 > [!IMPORTANT]
 > 该工具的目标是"尽力降级"——保留所有核心电路信息（连接性、元器件、值、位置），安全移除或转换新版本新增的非关键格式特性。支持从 KiCad 10 一路降级到 KiCad 7。
@@ -1036,3 +1036,203 @@ KiCad 8 和 KiCad 7 之间的 PCB 格式差异更大：
 | F16 | pad 兼容: `(remove_unused_layers yes)` → 裸标志 / `no` 时移除；移除 `(pintype)`/`(pinfunction)`/`(teardrops)` |
 | F17 | `(hide/bold/italic yes)` → 裸原子；移除 `(unlocked yes)` |
 | F18 | 通配符层名去引号: `"*.Cu"` → `*.Cu`（string → atom） |
+
+---
+
+## 第五部分：PCB (.kicad_pcb) KiCad 10 → KiCad 9 格式差异
+
+通过对比 `asset/kicad10/pic_programmer/pic_programmer.kicad_pcb` 和 `asset/kicad9/pic_programmer/pic_programmer.kicad_pcb`，发现以下**实际差异**：
+
+### PCB K10 差异 1: 文件头版本号
+
+```diff
+- (kicad_pcb (version 20241229) (generator "pcbnew") (generator_version "9.0"))
++ (kicad_pcb (version 20260206) (generator "pcbnew") (generator_version "10.0"))
+```
+
+### PCB K10 差异 2: `tenting` 语法变化 ⚠️ 关键
+
+KiCad 10 将 `tenting` 从紧凑格式改为嵌套列表格式：
+
+```
+;; KiCad 10:
+(tenting
+    (front yes)
+    (back yes)
+)
+
+;; KiCad 9:
+(tenting front back)
+```
+
+### PCB K10 差异 3: setup 新增 `covering`、`plugging`、`capping`、`filling` ⚠️ 关键
+
+KiCad 10 在 `setup` 节点中新增了四个通孔处理属性，KiCad 9 没有：
+
+```diff
+ (setup
+     ...
+     (tenting ...)
++    (covering
++        (front no)
++        (back no)
++    )
++    (plugging
++        (front no)
++        (back no)
++    )
++    (capping no)
++    (filling no)
+     (aux_axis_origin ...)
+ )
+```
+
+### PCB K10 差异 4: pcbplotparams 参数变化
+
+**K10 移除的 K9 参数（降级时需恢复）**:
+- `hpglpennumber 1`
+- `hpglpenspeed 20`
+- `hpglpendiameter 15.000000`
+- `plotinvisibletext no`
+
+**K10 浮点数格式变化**:
+```diff
+;; KiCad 9:
+- (dashed_line_dash_ratio 12.000000)
+- (dashed_line_gap_ratio 3.000000)
+;; KiCad 10:
++ (dashed_line_dash_ratio 12)
++ (dashed_line_gap_ratio 3)
+```
+
+### PCB K10 差异 5: 无顶层 `(net ...)` 声明块 ⚠️ 关键
+
+KiCad 9 在 `setup` 之后有完整的 net 声明列表，KiCad 10 **完全移除**了此块：
+
+```
+;; KiCad 9:
+(setup ...)
+(net 0 "")
+(net 1 "/PC-CLOCK-OUT")
+(net 2 "GND")
+(net 17 "VCC")
+...
+(footprint ...)
+
+;; KiCad 10（无 net 声明，直接到 footprint）:
+(setup ...)
+(footprint ...)
+```
+
+> [!IMPORTANT]
+> 降级时需要从 segment、via、pad、zone 中**收集所有 net 名称**，为每个 net 分配唯一 ID，然后在 setup 之后插入完整的 `(net ID "name")` 声明块。
+
+### PCB K10 差异 6: segment/via/pad/zone 中的 net 引用格式 ⚠️ 关键
+
+KiCad 10 使用 **net 名称字符串**，KiCad 9 使用 **net ID 数字**：
+
+```
+;; --- segment ---
+;; KiCad 10:
+(net "VCC")             ← net 名称字符串
+;; KiCad 9:
+(net 17)                ← net ID 数字
+
+;; --- pad ---
+;; KiCad 10:
+(net "VCC")             ← 仅 net 名称
+;; KiCad 9:
+(net 17 "VCC")          ← net ID + 名称
+
+;; --- zone ---
+;; KiCad 10:
+(net "GND")             ← 仅 net 名称
+;; KiCad 9:
+(net 2)                 ← net ID
+(net_name "GND")        ← 单独的 net_name 节点
+```
+
+### PCB K10 差异 7: via 新增 `capping`、`covering`、`plugging`、`filling` ⚠️ 关键
+
+KiCad 10 在每个 `via` 中新增了四个通孔处理属性，KiCad 9 没有：
+
+```diff
+ (via
+     (at 192.405 125.73)
+     (size 1.6) (drill 0.6)
+     (layers "F.Cu" "B.Cu")
++    (capping no)
++    (covering (front no) (back no))
++    (plugging (front no) (back no))
++    (filling no)
+     (net ...)
+     (uuid "..."))
+```
+
+### PCB K10 差异 8: zone fill 变化
+
+KiCad 10 在 zone 的 `fill` 中新增 `(island_removal_mode 0)`，同时移除了 `(filled_areas_thickness no)`：
+
+```diff
+ (fill yes
+     (thermal_gap 0.508)
+     (thermal_bridge_width 0.635)
++    (island_removal_mode 0)       ← K10 新增
+ )
+-    (filled_areas_thickness no)   ← K9 有，K10 没有
+```
+
+### PCB K10 差异 9: footprint 新增 `units` 和 `duplicate_pad_numbers_are_jumpers`
+
+```diff
+ (footprint "..."
+     ...
+     (sheetfile "pic_programmer.kicad_sch")
++    (units
++        (unit (name "A") (pins "1" "2"))
++    )
+     (attr through_hole)
++    (duplicate_pad_numbers_are_jumpers no)
+     (fp_line ...))
+```
+
+### PCB K10 差异 10: footprint property `unlocked` 和 `thickness` 变化
+
+KiCad 9 的 Datasheet/Description 属性有 `(unlocked yes)` 和字体 `(thickness 0.15)`，KiCad 10 移除了它们：
+
+```diff
+ (property "Datasheet" ""
+     (at 0 0 180)
++    (unlocked yes)              ← K9 有，K10 没有
+     (layer "F.Fab")
+     (hide yes)
+     (uuid "...")
+     (effects
+         (font
+             (size 1.27 1.27)
++            (thickness 0.15)    ← K9 有，K10 没有
+         )
+     ))
+```
+
+---
+
+### PCB K10 → K9 降级转换规则（NP1-NP10）
+
+| 规则 | 说明 |
+|------|------|
+| NP1 | 文件头降级: `version 20260206 → 20241229`，`generator_version "10.0" → "9.0"` |
+| NP2 | `(tenting (front yes)(back yes))` → `(tenting front back)` 紧凑格式 |
+| NP3 | 移除 setup 中的 `(covering ...)`、`(plugging ...)`、`(capping ...)`、`(filling ...)` |
+| NP4 | pcbplotparams: 恢复 `hpglpennumber`/`hpglpenspeed`/`hpglpendiameter`/`plotinvisibletext`；恢复浮点格式 |
+| NP5 | **收集所有 net 名称**，分配 ID，在 setup 后插入 `(net ID "name")` 声明块 |
+| NP6 | segment/via: `(net "name")` → `(net ID)`；pad: `(net "name")` → `(net ID "name")`；zone: `(net "name")` → `(net ID)` + 添加 `(net_name "name")` |
+| NP7 | 移除 via 中的 `(capping)`、`(covering)`、`(plugging)`、`(filling)` |
+| NP8 | zone fill: 移除 `(island_removal_mode ...)`；添加 `(filled_areas_thickness no)` |
+| NP9 | 移除 footprint 中的 `(units ...)`、`(duplicate_pad_numbers_are_jumpers ...)`、`(point ...)`（K10 新增的参考点标记） |
+| NP10 | footprint Datasheet/Description 属性恢复 `(unlocked yes)` 和字体 `(thickness 0.15)` |
+
+> [!IMPORTANT]
+> **NP5 + NP6 是最复杂的规则**，需要两遍处理：
+> 1. **第一遍**: 遍历所有 segment、via、pad、zone，收集 net 名称并分配 ID（空 net → ID 0）
+> 2. **第二遍**: 插入 net 声明块，替换所有 `(net "name")` 为对应 ID 格式

@@ -16,6 +16,7 @@
  * Symbol library conversion rules (K10 → K9): NS1-NS8
  * Symbol library conversion rules (K9 → K8): S1-S4
  * Symbol library conversion rules (K8 → K7): S10-S14
+ * PCB conversion rules (K10 → K9): NP1-NP10
  * PCB conversion rules (K9 → K8): P1-P9
  * PCB conversion rules (K8 → K7): P10-P20
  */
@@ -40,6 +41,7 @@ import {
 } from './sym-converter.js';
 
 import {
+    applyPcbK10toK9,
     applyPcbK9toK8,
     applyPcbK8toK7,
     PCB_VERSIONS,
@@ -185,8 +187,10 @@ export async function convertKicad(input, targetVersionKey) {
             steps.push({ from: versionTable.KICAD10, to: versionTable.KICAD9, fn: applyK10toK9 });
         } else if (isSymbolLib) {
             steps.push({ from: versionTable.KICAD10, to: versionTable.KICAD9, fn: applySymK10toK9 });
+        } else if (isPcb) {
+            steps.push({ from: versionTable.KICAD10, to: versionTable.KICAD9, fn: applyPcbK10toK9 });
         } else {
-            // For PCB/Footprint K10 support not yet implemented, fallback to header-only
+            // For Footprint K10 support not yet implemented, fallback to header-only
             steps.push({ from: versionTable.KICAD10, to: versionTable.KICAD9, fn: applyK10toK9 });
         }
     }

@@ -2,9 +2,22 @@
  * KiCad PCB (.kicad_pcb) Version Converter
  * 
  * Supports chain-based downgrade conversions for PCB files:
+ *   KiCad 10 → KiCad 9
  *   KiCad 9 → KiCad 8
  *   KiCad 8 → KiCad 7
- *   KiCad 9 → KiCad 7 (chained: 9→8→7)
+ *   KiCad 10 → KiCad 7 (chained: 10→9→8→7)
+ * 
+ * Conversion rules (K10 → K9): NP1-NP10
+ *   NP1: Header version/generator downgrade
+ *   NP2: tenting nested format → compact format
+ *   NP3: Remove setup covering/plugging/capping/filling
+ *   NP4: Restore K9 pcbplotparams (hpgl*, plotinvisibletext)
+ *   NP5: Collect all net names, assign IDs, insert net declaration block
+ *   NP6: Convert net references: name→ID in segment/via/pad/zone
+ *   NP7: Remove via capping/covering/plugging/filling
+ *   NP8: Zone fill: remove island_removal_mode, add filled_areas_thickness
+ *   NP9: Remove footprint units/duplicate_pad_numbers_are_jumpers
+ *   NP10: Restore footprint Datasheet/Description unlocked + font thickness
  * 
  * Conversion rules (K9 → K8): P1-P9
  *   P1: Header version/generator downgrade
@@ -42,6 +55,9 @@
  *   P24: Remove (net ...) from gr_* graphical elements (K7 doesn't support net on graphics)
  *   P25: Remove (locked yes) from gr_* graphical elements (K7 doesn't support locked on graphics)
  *   P26: group nodes: (tstamp ...) → (id ...) and remove (locked yes)
+ *
+ * Additional K9→K8 rules:
+ *   P27: Rename (solder_paste_margin_ratio) → (solder_paste_ratio) in footprints/pads
  */
 
 import {
@@ -60,6 +76,7 @@ const PCB_VERSIONS = {
     KICAD7: { version: '20221018', generatorVersion: null, label: 'KiCad 7' },
     KICAD8: { version: '20240108', generatorVersion: '8.0', label: 'KiCad 8' },
     KICAD9: { version: '20241229', generatorVersion: '9.0', label: 'KiCad 9' },
+    KICAD10: { version: '20260206', generatorVersion: '10.0', label: 'KiCad 10' },
 };
 
 export { PCB_VERSIONS };
@@ -128,6 +145,400 @@ const LAYER_NAME_TO_LEGACY_ID = {
 };
 
 // ============================================================
+//  KiCad 10 → KiCad 9 Conversion (PCB)
+// ============================================================
+
+/**
+ * Collect all unique net names from the AST by scanning segment, via, pad, and zone nodes.
+ * Returns a Map of netName → netId (starting from 0 for empty net, 1 for first real net).
+ */
+function collectAllNetNames(ast) {
+    const netNames = new Set();
+
+    function walk(node) {
+        if (!node || node.type !== 'list') return;
+
+        // segment: (net "name")
+        // arc: (net "name")  — curved traces
+        // via: (net "name")
+        // zone: (net "name")
+        if (node.name === 'segment' || node.name === 'arc' || node.name === 'via' || node.name === 'zone') {
+            const netNode = findChild(node, 'net');
+            if (netNode && netNode.children.length > 0) {
+                const nameChild = netNode.children[0];
+                if (nameChild.type === 'string' || nameChild.type === 'atom') {
+                    netNames.add(nameChild.value);
+                }
+            }
+        }
+
+        // pad: (net "name") — in K10 the pad has only a net name string
+        if (node.name === 'pad') {
+            const netNode = findChild(node, 'net');
+            if (netNode && netNode.children.length > 0) {
+                const nameChild = netNode.children[0];
+                if (nameChild.type === 'string' || nameChild.type === 'atom') {
+                    netNames.add(nameChild.value);
+                }
+            }
+        }
+
+        for (const child of node.children) {
+            walk(child);
+        }
+    }
+
+    walk(ast);
+
+    // Build a map: empty net → 0, then alphabetically sorted remaining nets → 1, 2, 3, ...
+    const netMap = new Map();
+    netMap.set('', 0);
+
+    const sortedNames = [...netNames].filter(n => n !== '').sort();
+    let nextId = 1;
+    for (const name of sortedNames) {
+        netMap.set(name, nextId++);
+    }
+
+    return netMap;
+}
+
+export async function applyPcbK10toK9(ast, log, warnings) {
+    const stats = {
+        np1_header: false,
+        np2_tenting: 0,
+        np3_setup_via_attrs: 0,
+        np4_plotparams: 0,
+        np5_net_declarations: 0,
+        np6_net_references: 0,
+        np7_via_attrs: 0,
+        np8_zone_fill: 0,
+        np9_footprint_attrs: 0,
+        np10_fp_property: 0,
+    };
+
+    // NP1: Header downgrade
+    setChildValue(ast, 'version', PCB_VERSIONS.KICAD9.version);
+    setChildValue(ast, 'generator_version', PCB_VERSIONS.KICAD9.generatorVersion);
+    stats.np1_header = true;
+    log.push(`NP1: Version → ${PCB_VERSIONS.KICAD9.version}, generator_version → "${PCB_VERSIONS.KICAD9.generatorVersion}"`);
+
+    // NP2: Convert tenting from nested format to compact format
+    // K10: (tenting (front yes) (back yes)) → K9: (tenting front back)
+    const setupNode = findChild(ast, 'setup');
+    if (setupNode) {
+        applyNP2Tenting(setupNode, stats, log);
+
+        // NP3: Remove covering/plugging/capping/filling from setup
+        applyNP3RemoveSetupViaAttrs(setupNode, stats, log);
+
+        // NP4: Restore K9 pcbplotparams
+        applyNP4RestoreK9PlotParams(setupNode, stats, log);
+    }
+
+    // NP5: Collect all net names and insert net declarations
+    const netMap = collectAllNetNames(ast);
+    if (netMap.size > 0) {
+        // Find insertion point: right after setup
+        const setupIdx = ast.children.findIndex(c => c.type === 'list' && c.name === 'setup');
+        const insertIdx = setupIdx >= 0 ? setupIdx + 1 : ast.children.length;
+
+        // Build net declaration nodes sorted by ID
+        const sortedEntries = [...netMap.entries()].sort((a, b) => a[1] - b[1]);
+        const netNodes = sortedEntries.map(([name, id]) => ({
+            type: 'list',
+            name: 'net',
+            children: [
+                { type: 'atom', value: String(id) },
+                { type: 'string', value: name },
+            ],
+        }));
+
+        // Insert all net declarations
+        ast.children.splice(insertIdx, 0, ...netNodes);
+        stats.np5_net_declarations = netNodes.length;
+        log.push(`NP5: Inserted ${netNodes.length} net declarations after setup`);
+    }
+
+    // NP6-NP10: Recursive transformation (uses netMap for NP6)
+    transformPcbK10toK9(ast, netMap, stats, log, warnings);
+
+    // Summary
+    log.push('--- K10→K9 PCB Summary ---');
+    log.push(`NP1 Header downgraded: ${stats.np1_header ? 'Yes' : 'No'}`);
+    log.push(`NP2 tenting converted to compact format: ${stats.np2_tenting}`);
+    log.push(`NP3 setup via-hole attrs removed: ${stats.np3_setup_via_attrs}`);
+    log.push(`NP4 K9 plotparams restored: ${stats.np4_plotparams}`);
+    log.push(`NP5 net declarations inserted: ${stats.np5_net_declarations}`);
+    log.push(`NP6 net references converted: ${stats.np6_net_references}`);
+    log.push(`NP7 via attrs removed: ${stats.np7_via_attrs}`);
+    log.push(`NP8 zone fill fixed: ${stats.np8_zone_fill}`);
+    log.push(`NP9 footprint attrs removed: ${stats.np9_footprint_attrs}`);
+    log.push(`NP10 footprint property restored: ${stats.np10_fp_property}`);
+}
+
+/**
+ * NP2: Convert tenting from nested format to compact format.
+ * K10: (tenting (front yes) (back yes)) → K9: (tenting front back)
+ */
+function applyNP2Tenting(setupNode, stats, log) {
+    const tentingNode = findChild(setupNode, 'tenting');
+    if (!tentingNode) return;
+
+    // Check if it's in K10 nested format (has (front ...) / (back ...) children)
+    const frontNode = findChild(tentingNode, 'front');
+    const backNode = findChild(tentingNode, 'back');
+
+    if (frontNode || backNode) {
+        // Build compact children list
+        const newChildren = [];
+        if (frontNode) {
+            const val = frontNode.children.length > 0 ? frontNode.children[0].value : 'yes';
+            if (val === 'yes') {
+                newChildren.push({ type: 'atom', value: 'front' });
+            }
+        }
+        if (backNode) {
+            const val = backNode.children.length > 0 ? backNode.children[0].value : 'yes';
+            if (val === 'yes') {
+                newChildren.push({ type: 'atom', value: 'back' });
+            }
+        }
+        tentingNode.children = newChildren;
+        stats.np2_tenting++;
+        log.push(`NP2: Converted tenting to compact format`);
+    }
+}
+
+/**
+ * NP3: Remove covering/plugging/capping/filling from setup.
+ * These are K10-only via hole processing attributes.
+ */
+function applyNP3RemoveSetupViaAttrs(setupNode, stats, log) {
+    const k10Attrs = ['covering', 'plugging', 'capping', 'filling'];
+    for (const attr of k10Attrs) {
+        const removed = removeAllChildren(setupNode, attr);
+        if (removed > 0) {
+            stats.np3_setup_via_attrs += removed;
+            log.push(`NP3: Removed (${attr}) from setup`);
+        }
+    }
+}
+
+/**
+ * NP4: Restore K9 pcbplotparams that K10 removed.
+ * Restores: hpglpennumber, hpglpenspeed, hpglpendiameter, plotinvisibletext
+ * Also fix float format: ensure trailing zeros for dashed_line_dash_ratio/gap_ratio
+ */
+function applyNP4RestoreK9PlotParams(setupNode, stats, log) {
+    const pcbplotparams = findChild(setupNode, 'pcbplotparams');
+    if (!pcbplotparams) return;
+
+    const k9Params = [
+        { name: 'hpglpennumber', value: '1' },
+        { name: 'hpglpenspeed', value: '20' },
+        { name: 'hpglpendiameter', value: '15.000000' },
+        { name: 'plotinvisibletext', value: 'no' },
+    ];
+
+    for (const param of k9Params) {
+        const existing = findChild(pcbplotparams, param.name);
+        if (!existing) {
+            pcbplotparams.children.push({
+                type: 'list',
+                name: param.name,
+                children: [{ type: 'atom', value: param.value }],
+            });
+            stats.np4_plotparams++;
+            log.push(`NP4: Added (${param.name} ${param.value}) to pcbplotparams`);
+        }
+    }
+
+    // Fix float format: K10 uses integer format (12), K9 uses (12.000000)
+    const floatParams = ['dashed_line_dash_ratio', 'dashed_line_gap_ratio'];
+    for (const paramName of floatParams) {
+        const node = findChild(pcbplotparams, paramName);
+        if (node && node.children.length > 0) {
+            const val = node.children[0].value;
+            // If the value is an integer (no decimal point), add .000000
+            if (val && !val.includes('.')) {
+                node.children[0].value = val + '.000000';
+                stats.np4_plotparams++;
+            }
+        }
+    }
+}
+
+/**
+ * Recursive transformation for K10→K9 PCB.
+ * Handles NP6, NP7, NP8, NP9, NP10.
+ */
+function transformPcbK10toK9(node, netMap, stats, log, warnings) {
+    if (!node || node.type !== 'list') return;
+
+    // NP6: Convert net references in segment, arc, and via
+    // K10: (net "name") → K9: (net ID)
+    if (node.name === 'segment' || node.name === 'arc' || node.name === 'via') {
+        const netNode = findChild(node, 'net');
+        if (netNode && netNode.children.length > 0) {
+            const nameChild = netNode.children[0];
+            if (nameChild.type === 'string' || (nameChild.type === 'atom' && isNaN(Number(nameChild.value)))) {
+                const netName = nameChild.value;
+                const netId = netMap.get(netName);
+                if (netId !== undefined) {
+                    netNode.children = [{ type: 'atom', value: String(netId) }];
+                    stats.np6_net_references++;
+                }
+            }
+        }
+    }
+
+    // NP6: Convert net references in pad
+    // K10: (net "name") → K9: (net ID "name")
+    if (node.name === 'pad') {
+        const netNode = findChild(node, 'net');
+        if (netNode && netNode.children.length > 0) {
+            const nameChild = netNode.children[0];
+            if (nameChild.type === 'string' || (nameChild.type === 'atom' && isNaN(Number(nameChild.value)))) {
+                const netName = nameChild.value;
+                const netId = netMap.get(netName);
+                if (netId !== undefined) {
+                    netNode.children = [
+                        { type: 'atom', value: String(netId) },
+                        { type: 'string', value: netName },
+                    ];
+                    stats.np6_net_references++;
+                }
+            }
+        }
+    }
+
+    // NP6: Convert net references in zone
+    // K10: (net "name") → K9: (net ID) + add (net_name "name")
+    if (node.name === 'zone') {
+        const netNode = findChild(node, 'net');
+        if (netNode && netNode.children.length > 0) {
+            const nameChild = netNode.children[0];
+            if (nameChild.type === 'string' || (nameChild.type === 'atom' && isNaN(Number(nameChild.value)))) {
+                const netName = nameChild.value;
+                const netId = netMap.get(netName);
+                if (netId !== undefined) {
+                    // Replace (net "name") with (net ID)
+                    netNode.children = [{ type: 'atom', value: String(netId) }];
+
+                    // Add (net_name "name") right after (net ID) if not already present
+                    const existingNetName = findChild(node, 'net_name');
+                    if (!existingNetName) {
+                        const netIdx = node.children.findIndex(c => c === netNode);
+                        const insertIdx = netIdx >= 0 ? netIdx + 1 : 1;
+                        node.children.splice(insertIdx, 0, {
+                            type: 'list',
+                            name: 'net_name',
+                            children: [{ type: 'string', value: netName }],
+                        });
+                    }
+                    stats.np6_net_references++;
+                }
+            }
+        }
+    }
+
+    // NP7: Remove via capping/covering/plugging/filling
+    if (node.name === 'via') {
+        const viaAttrs = ['capping', 'covering', 'plugging', 'filling'];
+        for (const attr of viaAttrs) {
+            const removed = removeAllChildren(node, attr);
+            if (removed > 0) {
+                stats.np7_via_attrs += removed;
+            }
+        }
+    }
+
+    // NP8: Zone fill changes
+    // Remove (island_removal_mode ...) from fill; add (filled_areas_thickness no)
+    if (node.name === 'zone') {
+        const fillNode = findChild(node, 'fill');
+        if (fillNode) {
+            const removedIsland = removeAllChildren(fillNode, 'island_removal_mode');
+            if (removedIsland > 0) {
+                stats.np8_zone_fill += removedIsland;
+            }
+        }
+
+        // Add (filled_areas_thickness no) if not present
+        const existingFat = findChild(node, 'filled_areas_thickness');
+        if (!existingFat) {
+            // Insert after fill node
+            const fillIdx = node.children.findIndex(c => c.type === 'list' && c.name === 'fill');
+            const insertIdx = fillIdx >= 0 ? fillIdx + 1 : node.children.length;
+            node.children.splice(insertIdx, 0, {
+                type: 'list',
+                name: 'filled_areas_thickness',
+                children: [{ type: 'atom', value: 'no' }],
+            });
+            stats.np8_zone_fill++;
+        }
+    }
+
+    // NP9: Remove footprint-level K10-only attributes
+    if (node.name === 'footprint') {
+        const fpAttrs = ['units', 'duplicate_pad_numbers_are_jumpers', 'point', 'component_classes'];
+        for (const attr of fpAttrs) {
+            const removed = removeAllChildren(node, attr);
+            if (removed > 0) {
+                stats.np9_footprint_attrs += removed;
+            }
+        }
+    }
+
+    // NP10: Restore Datasheet/Description property unlocked and font thickness in footprints
+    // K10 removes (unlocked yes) and (thickness 0.15) that K9 has.
+    if (node.name === 'footprint') {
+        for (const child of node.children) {
+            if (child.type !== 'list' || child.name !== 'property') continue;
+            if (child.children.length < 1) continue;
+
+            const propName = child.children[0].value;
+            if (propName === 'Datasheet' || propName === 'Description') {
+                // Add (unlocked yes) if not present, before (layer ...)
+                const hasUnlocked = child.children.some(c => c.type === 'list' && c.name === 'unlocked');
+                if (!hasUnlocked) {
+                    const layerIdx = child.children.findIndex(c => c.type === 'list' && c.name === 'layer');
+                    const insertIdx = layerIdx >= 0 ? layerIdx : child.children.length;
+                    child.children.splice(insertIdx, 0, {
+                        type: 'list',
+                        name: 'unlocked',
+                        children: [{ type: 'atom', value: 'yes' }],
+                    });
+                    stats.np10_fp_property++;
+                }
+
+                // Add (thickness 0.15) to font if not present
+                const effectsNode = findChild(child, 'effects');
+                if (effectsNode) {
+                    const fontNode = findChild(effectsNode, 'font');
+                    if (fontNode) {
+                        const hasThickness = fontNode.children.some(c => c.type === 'list' && c.name === 'thickness');
+                        if (!hasThickness) {
+                            fontNode.children.push({
+                                type: 'list',
+                                name: 'thickness',
+                                children: [{ type: 'atom', value: '0.15' }],
+                            });
+                            stats.np10_fp_property++;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for (const childNode of node.children) {
+        transformPcbK10toK9(childNode, netMap, stats, log, warnings);
+    }
+}
+
+// ============================================================
 //  KiCad 9 → KiCad 8 Conversion (PCB)
 // ============================================================
 
@@ -145,6 +556,7 @@ export async function applyPcbK9toK8(ast, log, warnings) {
         p21_dimension_style: 0,
         p22_zone_placement: 0,
         p23_curved_edges: 0,
+        p27_solder_paste_ratio: 0,
     };
 
     // P1: Header downgrade
@@ -172,7 +584,7 @@ export async function applyPcbK9toK8(ast, log, warnings) {
     }
 
     // P8: Remove K9-only top-level elements
-    const k9Elements = ['embedded_files', 'component_class'];
+    const k9Elements = ['embedded_files', 'component_class', 'component_classes'];
     for (const elemName of k9Elements) {
         const removed = removeAllChildren(ast, elemName);
         if (removed > 0) {
@@ -199,6 +611,7 @@ export async function applyPcbK9toK8(ast, log, warnings) {
     log.push(`P21 Dimension style fixed: ${stats.p21_dimension_style}`);
     log.push(`P22 Zone placement removed: ${stats.p22_zone_placement}`);
     log.push(`P23 curved_edges→curve_points renamed: ${stats.p23_curved_edges}`);
+    log.push(`P27 solder_paste_margin_ratio→solder_paste_ratio renamed: ${stats.p27_solder_paste_ratio}`);
 }
 
 /**
@@ -370,6 +783,13 @@ function transformPcbK9toK8(node, stats, log, warnings) {
         if (removed > 0) {
             stats.p5_embedded_fonts += removed;
         }
+    }
+
+    // P27: Rename (solder_paste_margin_ratio ...) → (solder_paste_ratio ...)
+    // K9 renamed solder_paste_ratio to solder_paste_margin_ratio; K8 doesn't recognize it.
+    if (node.name === 'solder_paste_margin_ratio') {
+        node.name = 'solder_paste_ratio';
+        stats.p27_solder_paste_ratio = (stats.p27_solder_paste_ratio || 0) + 1;
     }
 
     // P21: Fix dimension style nodes for K8 compatibility
