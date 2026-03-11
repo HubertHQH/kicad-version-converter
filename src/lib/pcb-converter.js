@@ -30,7 +30,8 @@
  *   P7: Restore K8 pcbplotparams: plotreference yes, plotvalue yes, plotfptext yes
  *   P8: Remove K9-only top-level elements (embedded_files, component_class)
  *   P9: Remove font thickness from Datasheet/Description property fonts
- *   P21: Remove (arrow_direction) and fix (keep_text_aligned) in dimension style
+ *   P21: Remove (arrow_direction) and fix (keep_text_aligned) in dimension style;
+ *        convert (suppress_zeroes yes) list to bare atom in dimension format
  *   P22: Remove (placement ...) from zone definitions (multi-channel auto-placement area, K9 only)
  *   P23: Rename (curved_edges ...) → (curve_points ...) in pad teardrops
  * 
@@ -815,6 +816,27 @@ function transformPcbK9toK8(node, stats, log, warnings) {
                 } else {
                     // If not yes, just remove it
                     styleNode.children.splice(keepAlignedIdx, 1);
+                }
+                stats.p21_dimension_style = (stats.p21_dimension_style || 0) + 1;
+            }
+        }
+
+        // P21 (format): Convert (suppress_zeroes yes) list → bare atom suppress_zeroes
+        // K9 uses (suppress_zeroes yes/no) as a list, but K8 expects suppress_zeroes as a bare keyword atom.
+        const formatNode = findChild(node, 'format');
+        if (formatNode) {
+            const szIdx = formatNode.children.findIndex(
+                c => c.type === 'list' && c.name === 'suppress_zeroes'
+            );
+            if (szIdx >= 0) {
+                const szNode = formatNode.children[szIdx];
+                const val = szNode.children.length > 0 ? szNode.children[0].value : 'yes';
+                if (val === 'yes') {
+                    // Replace with bare atom
+                    formatNode.children[szIdx] = { type: 'atom', value: 'suppress_zeroes' };
+                } else {
+                    // If 'no', remove entirely (default behavior in K8 is no suppression)
+                    formatNode.children.splice(szIdx, 1);
                 }
                 stats.p21_dimension_style = (stats.p21_dimension_style || 0) + 1;
             }
