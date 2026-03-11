@@ -19,7 +19,7 @@
 
 ## 转换规则
 
-### 原理图 (.kicad_sch) — KiCad 10 → KiCad 9（N1-N8）
+### 原理图 (.kicad_sch) — KiCad 10 → KiCad 9（N1-N10）
 
 | 规则 | 说明 |
 |------|------|
@@ -31,6 +31,10 @@
 | N6 | `(power global)` → `(power)`（K10 新增 `global` 参数，K9 使用裸 `power`） |
 | N7 | 移除 lib_symbol 中的 `(body_styles ...)` 节点 |
 | N8 | lib_symbol 中空 pin 名 `(name "")` → `(name "~")`（K10 用空字符串，K9 用波浪号） |
+| N9 | 移除 `(path ...)` 中的 `(variant ...)`（K10 变体功能，K9 不支持） |
+| N10 | 移除顶层 `(group ...)`（K10 原理图分组功能，K9 不支持） |
+
+> ⚠️ **层次图纸提示**：含有子图纸引用的项目需要将所有 `.kicad_sch` 文件一同上传转换，否则 KiCad 打开时子图纸会因版本过高而报错。
 
 ### 原理图 (.kicad_sch) — KiCad 9 → KiCad 8（R1-R8）
 

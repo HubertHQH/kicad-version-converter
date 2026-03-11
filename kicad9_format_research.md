@@ -113,9 +113,38 @@ KiCad 10 使用空字符串 `""` 表示未命名 pin，KiCad 9 使用波浪号 `
 +(name "~" (effects ...))
 ```
 
+### K10 差异 9: symbol instance path 中的 variant（变体）
+
+KiCad 10 引入了 variants（变体）功能，会在 symbol 实例的 `(path ...)` 节点中添加 `(variant ...)` 子节点：
+```diff
+ (instances
+     (project "xxx"
+         (path "/uuid" (reference "R17") (unit 1)
++            (variant
++                (name "111")
++                (in_bom yes)
++            )
+         )))
+```
+KiCad 9 只接受 `reference`、`unit`、`value`、`footprint` 作为 path 的子节点。
+
+### K10 差异 10: 原理图中的 group 节点
+
+KiCad 10 在原理图中引入了 `(group ...)` 顶层节点（用于 variant 分组等）：
+```diff
++(group "power"
++    (uuid "...")
++    (lib_id "Library:power")
++    (members
++        "uuid1"
++        "uuid2"
++    ))
+```
+KiCad 9 的原理图解析器不识别顶层 `(group)` 节点。
+
 ---
 
-### K10 → K9 降级转换规则（N1-N8）
+### K10 → K9 降级转换规则（N1-N10）
 
 | 规则 | 说明 |
 |------|------|
@@ -127,6 +156,11 @@ KiCad 10 使用空字符串 `""` 表示未命名 pin，KiCad 9 使用波浪号 `
 | N6 | `(power global)` → `(power)`（移除 `global` 参数） |
 | N7 | 移除 lib_symbol 中的 `(body_styles ...)` 节点 |
 | N8 | lib_symbol pin 名 `(name "")` → `(name "~")`（空字符串 → 波浪号） |
+| N9 | 移除 `(path ...)` 中的 `(variant ...)` 节点（K10 变体功能，K9 不支持） |
+| N10 | 移除顶层 `(group ...)` 节点（K10 原理图分组功能，K9 不支持） |
+
+> [!WARNING]
+> 含有层次图纸（hierarchical sheets）的项目需要将所有子图纸 `.kicad_sch` 文件一起转换，否则 KiCad 打开主图纸时会因子图纸版本过高而报错。
 
 ---
 
@@ -399,6 +433,7 @@ KiCad 8 不强制要求特定排序，元素顺序不同不影响加载。可以
  ┌─────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
  │ 原理图   │  │ 符号库    │  │   PCB    │  │  封装    │
  │ N1-N8   │  │ NS1-NS8 │  │ NP1-NP10│  │ NF1-NF2 │  ← K10→K9 转换
+ │ N9-N10  │  │         │  │         │  │         │
  │ R1-R8   │  │ S1-S4   │  │ P1-P9   │  │ F1-F4   │  ← K9→K8 转换
  │ R10-R15 │  │ S10-S14 │  │ P10-P26 │  │ F10-F18 │  ← K8→K7 转换
  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘
@@ -444,8 +479,8 @@ KiCad 8 不强制要求特定排序，元素顺序不同不影响加载。可以
 > - ~~**符号库文件**: `.kicad_sym` 符号库文件也有版本差异，需要单独处理~~ ✅ 已实现
 > - ~~**PCB 文件**: `.kicad_pcb` 文件也有类似的版本问题~~ ✅ 已实现
 > - ~~**封装文件**: `.kicad_mod` 封装文件也需要降级处理~~ ✅ 已实现
-> - ~~**KiCad 10 支持**: 需要支持 KiCad 10 文件的降级转换~~ ✅ 已实现（原理图 N1-N8，符号库 NS1-NS8，PCB NP1-NP10，封装 NF1-NF2）
-> - **多 Sheet 项目**: 每个 `.kicad_sch` 文件都需要单独转换
+> - ~~**KiCad 10 支持**: 需要支持 KiCad 10 文件的降级转换~~ ✅ 已实现（原理图 N1-N10，符号库 NS1-NS8，PCB NP1-NP10，封装 NF1-NF2）
+> - **多 Sheet 项目**: 每个 `.kicad_sch` 文件都需要单独转换（工具会自动检测并警告需要一起转换的子图纸文件）
 > - **项目文件**: `.kicad_pro` 项目文件也需要版本降级处理
 > - **行长度限制**: KiCad 8 对单行长度有限制，嵌入图片的 base64 数据需逐行输出。
 
