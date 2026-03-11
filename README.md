@@ -100,11 +100,11 @@
 | P7 | 恢复 K8 的 pcbplotparams 参数（`plotreference`、`plotvalue`、`plotfptext`） |
 | P8 | 移除 K9 专有顶层元素（`embedded_files`、`component_class`） |
 | P9 | 移除 Datasheet/Description 属性字体中的 `thickness` |
-| P21 | dimension style 中移除 `(arrow_direction ...)` 并修复 `(keep_text_aligned yes)` → 裸原子 |
+| P21 | dimension style 中移除 `(arrow_direction ...)`，`(keep_text_aligned yes)` → 裸原子；dimension format 中 `(suppress_zeroes yes)` → 裸原子 |
 | P22 | 移除 zone 中的 `(placement ...)`（KiCad 9 多通道自动放置区域功能，K8 不支持） |
 | P23 | pad teardrops 中 `(curved_edges ...)` → `(curve_points ...)`（K9 重命名，K8 不认识） |
 
-### PCB (.kicad_pcb) — KiCad 8 → KiCad 7（P10-P26）
+### PCB (.kicad_pcb) — KiCad 8 → KiCad 7（P10-P28）
 
 | 规则 | 说明 |
 |------|------|
@@ -119,13 +119,15 @@
 | P18 | 移除 `setup` 中的 `(allow_soldermask_bridges_in_footprints ...)` |
 | P19 | `pcbplotparams` 中布尔值 `yes/no` → `true/false` |
 | P20 | 移除 K8 新增 pcbplotparams（`pdf_front/back_fp_property_popups`、`plotfptext`） |
-| P21 | pad/via 属性兼容：`(remove_unused_layers yes)` → 裸标志 / `no` 时移除；`(keep_end_layers ...)` 同理；移除 `(pintype ...)`、`(pinfunction ...)`、`(teardrops ...)`、`(free yes)` |
+| P21 | pad/via 属性兼容：`(remove_unused_layers yes)` → 裸标志 / `no` 时移除；`(keep_end_layers ...)` 同理；移除 `(pintype ...)`、`(pinfunction ...)`、`(teardrops ...)`、`(free yes)`、`(zone_layer_connections ...)` |
 | P21b | property/effects/font/model 中 `(hide yes)` → 裸 `hide`，`(bold yes)` → 裸 `bold`，`(italic yes)` → 裸 `italic` |
 | P22 | 图形元素填充属性 `(fill no)` → `(fill none)`（KiCad 7 只接受 `yes`/`none`/`solid`，不接受 `no`） |
 | P23 | 移除 `fp_text` 中的 `(unlocked yes)`（KiCad 7 不支持此属性） |
 | P24 | 移除顶层图形元素（`gr_line`/`gr_circle`/`gr_arc` 等）中的 `(net ...)`（KiCad 7 不支持图形元素分配网络） |
 | P25 | 移除顶层图形元素（`gr_text`/`gr_line` 等）中的 `(locked yes)`（KiCad 7 不支持） |
 | P26 | `group` 节点：`(uuid ...)` → `(id ...)`，移除 `(locked yes)`（KiCad 7 的 group 用 `id` 不用 `tstamp`） |
+| P27 | 移除 footprint `(attr ...)` 中的 K8 专有标志（`dnp`、`allow_missing_courtyard`） |
+| P28 | 移除顶层 `(generated ...)` 元素（调谐图案等 KiCad 8 特有功能，K7 不支持） |
 
 ### 封装 (.kicad_mod) — KiCad 9 → KiCad 8（F1-F4）
 

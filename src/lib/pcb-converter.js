@@ -56,6 +56,8 @@
  *   P24: Remove (net ...) from gr_* graphical elements (K7 doesn't support net on graphics)
  *   P25: Remove (locked yes) from gr_* graphical elements (K7 doesn't support locked on graphics)
  *   P26: group nodes: (tstamp ...) → (id ...) and remove (locked yes)
+ *   P27: Remove K8-only attr flags (dnp, allow_missing_courtyard) from footprints
+ *   P28: Remove top-level (generated ...) elements (tuning patterns etc.) — K7 doesn't support them
  *
  * Additional K9→K8 rules:
  *   P27: Rename (solder_paste_margin_ratio) → (solder_paste_ratio) in footprints/pads
@@ -920,6 +922,8 @@ export async function applyPcbK8toK7(ast, log, warnings) {
         p24_gr_net_removed: 0,
         p25_gr_locked_removed: 0,
         p26_group_fixed: 0,
+        p27_attr_k8only: 0,
+        p28_generated_removed: 0,
     };
 
     // P10: Header downgrade
@@ -963,6 +967,15 @@ export async function applyPcbK8toK7(ast, log, warnings) {
         applyP20RemoveK8PlotParams(setupNode, stats, log);
     }
 
+    // P28: Remove top-level (generated ...) elements (tuning patterns, etc.)
+    // KiCad 8 introduced generated objects; KiCad 7 doesn't support them.
+    const removedGenerated = removeAllChildren(ast, 'generated');
+    if (removedGenerated > 0) {
+        stats.p28_generated_removed += removedGenerated;
+        log.push(`P28: Removed ${removedGenerated} top-level (generated) element(s)`);
+        warnings.push(`Removed ${removedGenerated} generated element(s) (tuning patterns etc.) - KiCad 8 only feature`);
+    }
+
     // P11-P16: Recursive transformation
     transformPcbK8toK7(ast, stats, log, warnings);
 
@@ -985,6 +998,8 @@ export async function applyPcbK8toK7(ast, log, warnings) {
     log.push(`P24 net removed from gr_* elements: ${stats.p24_gr_net_removed}`);
     log.push(`P25 locked removed from gr_* elements: ${stats.p25_gr_locked_removed}`);
     log.push(`P26 group nodes fixed: ${stats.p26_group_fixed}`);
+    log.push(`P27 K8-only attr flags removed: ${stats.p27_attr_k8only}`);
+    log.push(`P28 generated elements removed: ${stats.p28_generated_removed}`);
 }
 
 /**
@@ -1060,11 +1075,24 @@ function transformPcbK8toK7(node, stats, log, warnings) {
 
     // P21: Also remove teardrops and (free yes) from vias
     // K7 doesn't support teardrops anywhere, and doesn't support (free yes) on vias
+    // Also convert (remove_unused_layers yes) → bare (remove_unused_layers),
+    // (keep_end_layers yes) → bare (keep_end_layers),
+    // and remove (zone_layer_connections ...) — K7 doesn't support these on vias.
     if (node.name === 'via') {
         for (let i = node.children.length - 1; i >= 0; i--) {
             const child = node.children[i];
-            if (child.type === 'list' && (child.name === 'teardrops' || child.name === 'free')) {
+            if (child.type === 'list' && (child.name === 'teardrops' || child.name === 'free' || child.name === 'zone_layer_connections')) {
                 node.children.splice(i, 1);
+                stats.p21_pad_compat++;
+            }
+            // Convert remove_unused_layers / keep_end_layers: list→bare atom or remove
+            if (child.type === 'list' && (child.name === 'remove_unused_layers' || child.name === 'keep_end_layers')) {
+                const value = child.children.length > 0 ? child.children[0].value : 'yes';
+                if (value === 'yes') {
+                    child.children = []; // bare flag
+                } else {
+                    node.children.splice(i, 1); // remove entirely
+                }
                 stats.p21_pad_compat++;
             }
         }
@@ -1244,6 +1272,22 @@ function transformFootprintK8toK7(fpNode, stats, log, warnings) {
             fpNode.children.splice(bareLockedIdx, 1);
             // nameIdx shifted by -1 after removal
             fpNode.children.splice(nameIdx, 0, { type: 'atom', value: 'locked' });
+        }
+    }
+
+    // P27: Remove K8-only attr flags (dnp, allow_missing_courtyard) from footprint
+    // KiCad 8 introduced these flags; KiCad 7 only supports:
+    //   through_hole, smd, virtual, board_only, exclude_from_pos_files,
+    //   exclude_from_bom, allow_solder_mask_bridges
+    const attrNode = findChild(fpNode, 'attr');
+    if (attrNode) {
+        const k8OnlyFlags = ['dnp', 'allow_missing_courtyard'];
+        for (let i = attrNode.children.length - 1; i >= 0; i--) {
+            const child = attrNode.children[i];
+            if (child.type === 'atom' && k8OnlyFlags.includes(child.value)) {
+                attrNode.children.splice(i, 1);
+                stats.p27_attr_k8only = (stats.p27_attr_k8only || 0) + 1;
+            }
         }
     }
 

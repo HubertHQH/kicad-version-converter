@@ -802,6 +802,30 @@ KiCad 9 在 dimension 的 `style` 节点中新增了 `(arrow_direction outward)`
 +    (keep_text_aligned yes))      ← K8 期望裸原子
 ```
 
+### PCB 差异 8b: Dimension format 中的 `suppress_zeroes` 语法 ⚠️ 关键
+
+KiCad 9 将 dimension format 中的 `suppress_zeroes` 从裸原子（flag）改为列表形式：
+
+```diff
+;; KiCad 8 dimension format:
+ (format
+     (prefix "")
+     (suffix "")
+     (units 3)
+     (units_format 0)
+     (precision 4)
+-    suppress_zeroes)            ← 裸原子
+
+;; KiCad 9 dimension format:
+ (format
+     (prefix "")
+     (suffix "")
+     (units 3)
+     (units_format 0)
+     (precision 4)
++    (suppress_zeroes yes))      ← 列表形式，K8 不认识！
+```
+
 ### PCB 差异 9: Zone 中的 `placement` 属性 ⚠️ 关键
 
 KiCad 9 在 zone 定义中新增了 `(placement ...)` 子节点，用于多通道（multi-channel）自动放置区域功能。KiCad 8 不支持此属性，解析时会报错。
@@ -873,6 +897,9 @@ KiCad 8 和 KiCad 7 之间的 PCB 格式差异更大：
 | fp_text unlocked | `(unlocked yes)` 支持 | ❌ 不存在 |
 | 图形元素 net | `gr_*` 支持 `(net ...)` 分配网络 | ❌ 不支持 |
 | 图形元素 locked | `gr_*` 支持 `(locked yes)` | ❌ 不支持 |
+| footprint attr 标志 | `dnp`、`allow_missing_courtyard` | ❌ 不存在 |
+| via 属性 | `(remove_unused_layers yes)` / `(keep_end_layers yes)` / `(zone_layer_connections ...)` | 裸标志或不存在 |
+| generated 元素 | `(generated ...)` 调谐图案等 | ❌ 不存在 |
 
 ---
 
@@ -891,11 +918,11 @@ KiCad 8 和 KiCad 7 之间的 PCB 格式差异更大：
 | P7 | 恢复 K8 的 `plotreference`、`plotvalue`、`plotfptext` 参数 |
 | P8 | 移除 K9 专有顶层元素（`embedded_files`、`component_class`） |
 | P9 | 移除 Datasheet/Description 属性字体中的 `thickness` |
-| P21 | 移除 dimension style 中的 `(arrow_direction ...)`，`(keep_text_aligned yes)` → 裸原子 |
+| P21 | 移除 dimension style 中的 `(arrow_direction ...)`，`(keep_text_aligned yes)` → 裸原子；dimension format 中 `(suppress_zeroes yes)` → 裸原子 |
 | P22 | 移除 zone 中的 `(placement ...)`（多通道自动放置区域，K9 特有功能） |
 | P23 | pad teardrops 中 `(curved_edges ...)` → `(curve_points ...)`（K9 重命名） |
 
-### K8 → K7 规则（P10-P26）
+### K8 → K7 规则（P10-P28）
 
 | 规则 | 说明 |
 |------|------|
@@ -910,13 +937,15 @@ KiCad 8 和 KiCad 7 之间的 PCB 格式差异更大：
 | P18 | 移除 `(allow_soldermask_bridges_in_footprints)` |
 | P19 | pcbplotparams 布尔值 `yes/no` → `true/false` |
 | P20 | 移除 K8 新增 pcbplotparams（`pdf_front/back_fp_property_popups`、`plotfptext`） |
-| P21 | pad 属性兼容：`(remove_unused_layers yes)` → 裸标志 / `no` 时移除；`(keep_end_layers)` 同理；移除 `(pintype)`、`(pinfunction)` |
+| P21 | pad/via 属性兼容：`(remove_unused_layers yes)` → 裸标志 / `no` 时移除；`(keep_end_layers)` 同理；移除 `(pintype)`、`(pinfunction)`、`(teardrops)`、`(free yes)`、`(zone_layer_connections ...)` |
 | P21b | property/effects/font/model 中 `(hide yes)` → 裸 `hide`，`(bold yes)` → 裸 `bold`，`(italic yes)` → 裸 `italic` |
 | P22 | 图形元素 `(fill no)` → `(fill none)`（K7 只接受 `yes`/`none`/`solid`，不接受 `no`） |
 | P23 | 移除 `fp_text` 中的 `(unlocked yes)`（K7 不支持此属性） |
 | P24 | 移除顶层图形元素（`gr_line`/`gr_circle`/`gr_arc`/`gr_rect`/`gr_poly`/`gr_text`）中的 `(net ...)`（K7 不支持） |
 | P25 | 移除顶层图形元素（`gr_text`/`gr_line` 等）中的 `(locked yes)`（K7 不支持） |
 | P26 | `group` 节点：`(uuid/tstamp ...)` → `(id ...)`，移除 `(locked yes)`（K7 group 用 `id`） |
+| P27 | 移除 footprint `(attr ...)` 中的 K8 专有标志（`dnp`、`allow_missing_courtyard`） |
+| P28 | 移除顶层 `(generated ...)` 元素（调谐图案等 KiCad 8 特有功能，K7 不支持） |
 
 ---
 
