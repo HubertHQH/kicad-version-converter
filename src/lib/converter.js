@@ -240,6 +240,17 @@ export async function convertKicad(input, targetVersionKey) {
     log.push('\nSerializing output...');
     const output = serializeSExpr(ast) + '\n';
 
+    // Detect hierarchical sub-sheets and warn about them
+    if (isSchematic && steps.length > 0) {
+        const subSheets = [];
+        collectSubSheetFiles(ast, subSheets);
+        if (subSheets.length > 0) {
+            warnings.push(`This schematic references ${subSheets.length} sub-sheet(s) that also need conversion: ${subSheets.join(', ')}`);
+            log.push(`\n⚠ Hierarchical schematic detected — ${subSheets.length} sub-sheet(s) must also be converted:`);
+            subSheets.forEach(s => log.push(`   • ${s}`));
+        }
+    }
+
     return { output, log, warnings, fileType: fileTypeLabel };
 }
 
@@ -248,6 +259,33 @@ export async function convertKicad(input, targetVersionKey) {
  */
 export async function convertKicad9to8(input) {
     return convertKicad(input, 'KICAD8');
+}
+
+// ============================================================
+//  Hierarchical Sheet Detection
+// ============================================================
+
+/**
+ * Collect sub-sheet filenames from (sheet (property "Sheetfile" "xxx.kicad_sch")) nodes.
+ */
+function collectSubSheetFiles(node, result) {
+    if (!node || node.type !== 'list') return;
+    if (node.name === 'sheet') {
+        for (const child of node.children) {
+            if (child.type === 'list' && child.name === 'property' &&
+                child.children.length >= 2 &&
+                (child.children[0].value === 'Sheetfile' || child.children[0].value === 'Sheet file')) {
+                const filename = child.children[1].value;
+                if (filename && !result.includes(filename)) {
+                    result.push(filename);
+                }
+            }
+        }
+        return;
+    }
+    for (const child of node.children) {
+        collectSubSheetFiles(child, result);
+    }
 }
 
 // ============================================================
@@ -264,6 +302,8 @@ async function applyK10toK9(ast, log, warnings) {
         n6_power_global: 0,
         n7_body_styles: 0,
         n8_pin_name_empty: 0,
+        n9_variant: 0,
+        n10_group: 0,
     };
 
     // N1: Header downgrade
@@ -275,6 +315,15 @@ async function applyK10toK9(ast, log, warnings) {
     // N2-N8: Recursive transformation
     transformK10toK9(ast, stats, log, warnings, false);
 
+    // N10: Remove top-level (group ...) nodes
+    // K10 adds group support to schematics (e.g. variant groups); K9 doesn't recognize (group) in schematics
+    const removedGroups = removeAllChildren(ast, 'group');
+    if (removedGroups > 0) {
+        stats.n10_group += removedGroups;
+        log.push(`N10: Removed ${removedGroups} (group) element(s)`);
+        warnings.push(`Removed ${removedGroups} (group) element(s) - KiCad 10 schematic groups not supported in KiCad 9`);
+    }
+
     // Summary
     log.push('--- K10→K9 Summary ---');
     log.push(`N1 Header downgraded: ${stats.n1_header ? 'Yes' : 'No'}`);
@@ -285,6 +334,8 @@ async function applyK10toK9(ast, log, warnings) {
     log.push(`N6 power global → power: ${stats.n6_power_global}`);
     log.push(`N7 body_styles removed from lib_symbols: ${stats.n7_body_styles}`);
     log.push(`N8 empty pin names → tilde: ${stats.n8_pin_name_empty}`);
+    log.push(`N9 variant removed from path: ${stats.n9_variant}`);
+    log.push(`N10 group elements removed: ${stats.n10_group}`);
 }
 
 /**
@@ -384,6 +435,16 @@ function transformK10toK9(node, stats, log, warnings, insideLibSymbol) {
         }
     }
 
+    // N9: Remove (variant ...) from (path ...) nodes inside instances
+    // K10 variants feature adds (variant (name "...") (in_bom yes)) to path nodes;
+    // K9 only expects reference, unit, value, footprint inside path.
+    if (node.name === 'path') {
+        const removed = removeAllChildren(node, 'variant');
+        if (removed > 0) {
+            stats.n9_variant += removed;
+        }
+    }
+
     for (const child of node.children) {
         transformK10toK9(child, stats, log, warnings, isTopLibSymbol);
     }
@@ -422,7 +483,7 @@ async function applyK9toK8(ast, log, warnings) {
     }
 
     // R7: Remove top-level K9-only elements
-    const k9Elements = ['table', 'rule_area', 'embedded_files'];
+    const k9Elements = ['table', 'rule_area', 'embedded_files', 'group'];
     for (const elemName of k9Elements) {
         const removed = removeAllChildren(ast, elemName);
         if (removed > 0) {
@@ -472,6 +533,11 @@ function transformK9toK8(node, stats, log, warnings) {
     }
     if (node.name === 'text' || node.name === 'text_box') {
         applyRule8ExcludeFromSim(node, stats, log);
+    }
+
+    // Strip K10 variant nodes that may have survived in K9 files
+    if (node.name === 'path') {
+        removeAllChildren(node, 'variant');
     }
 
     for (const child of node.children) {
