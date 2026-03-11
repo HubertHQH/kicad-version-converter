@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { convertKicad, detectVersion } from './lib/converter'
 import './App.css'
 
@@ -8,7 +8,15 @@ function App() {
   const [converting, setConverting] = useState(false)
   const [dragActive, setDragActive] = useState(false)
   const [targetVersion, setTargetVersion] = useState('KICAD8')
+  const [stats, setStats] = useState({ totalUses: 0, totalFiles: 0 })
   const fileInputRef = useRef(null)
+
+  useEffect(() => {
+    fetch('/api/stats')
+      .then(r => r.json())
+      .then(data => setStats(data))
+      .catch(() => {}) // Graceful fail for local dev
+  }, [])
 
   const targetOptions = [
     { key: 'KICAD9', label: 'KiCad 9', version: '20250114' },
@@ -114,6 +122,18 @@ function App() {
       targetLabel: target.label,
     })
     setConverting(false)
+
+    // Update global stats
+    if (convertedFiles.length > 0) {
+      fetch('/api/stats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fileCount: convertedFiles.length }),
+      })
+        .then(r => r.json())
+        .then(data => setStats(data))
+        .catch(() => {})
+    }
   }, [files, targetVersion])
 
   const downloadFile = useCallback((name, content) => {
@@ -167,6 +187,21 @@ function App() {
           <span className="version-arrow">→</span>
           <span className="version-badge to">KiCad 9 / 8 / 7</span>
         </div>
+        {(stats.totalUses > 0 || stats.totalFiles > 0) && (
+          <div className="stats-bar">
+            <span className="stat-counter">
+              <span className="stat-icon">🔄</span>
+              <span className="stat-number">{stats.totalUses.toLocaleString()}</span>
+              <span className="stat-label-text">conversions</span>
+            </span>
+            <span className="stat-divider">•</span>
+            <span className="stat-counter">
+              <span className="stat-icon">📄</span>
+              <span className="stat-number">{stats.totalFiles.toLocaleString()}</span>
+              <span className="stat-label-text">files processed</span>
+            </span>
+          </div>
+        )}
       </header>
 
       {/* Drop Zone */}

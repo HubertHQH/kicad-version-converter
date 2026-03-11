@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@upstash/redis": "^1.36.4",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },

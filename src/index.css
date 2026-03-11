@@ -174,6 +174,51 @@ body {
   font-size: 1.1rem;
 }
 
+/* === Stats Bar === */
+.stats-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1.25rem;
+  margin-top: 1.25rem;
+  padding: 0.5rem 1.25rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-radius: 9999px;
+  display: inline-flex;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+  animation: fadeIn 0.5s ease-out;
+}
+
+.stat-counter {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.stat-icon {
+  font-size: 0.85rem;
+}
+
+.stat-number {
+  font-weight: 700;
+  color: var(--hq-red);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85rem;
+}
+
+.stat-label-text {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.stat-divider {
+  color: var(--border-primary);
+  font-size: 0.6rem;
+}
+
 /* === Drop Zone === */
 .drop-zone-wrapper {
   margin-bottom: 2rem;
