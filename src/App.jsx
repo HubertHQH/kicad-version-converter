@@ -367,7 +367,8 @@ function App() {
 
       {/* Footer */}
       <footer className="app-footer">
-        <a href="https://www.nextpcb.com" target="_blank" rel="noopener">NextPCB</a> KiCad Version Converter • Supports .kicad_sch, .kicad_sym, .kicad_pcb &amp; .kicad_mod • Lossy conversion — version-specific features will be removed
+        <div><a href="https://www.nextpcb.com" target="_blank" rel="noopener">NextPCB</a> KiCad Version Converter • Supports .kicad_sch, .kicad_sym, .kicad_pcb &amp; .kicad_mod • Lossy conversion — version-specific features will be removed</div>
+        <div className="footer-support">Bug Report: <a href="mailto:huqinghan@huaqiu.com">huqinghan@huaqiu.com</a></div>
       </footer>
     </div>
   )

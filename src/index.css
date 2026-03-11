@@ -668,6 +668,12 @@ body {
   text-decoration: underline;
 }
 
+.footer-support {
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
 /* === Animations === */
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(8px); }
