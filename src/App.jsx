@@ -187,21 +187,6 @@ function App() {
           <span className="version-arrow">→</span>
           <span className="version-badge to">KiCad 9 / 8 / 7</span>
         </div>
-        {(stats.totalUses > 0 || stats.totalFiles > 0) && (
-          <div className="stats-bar">
-            <span className="stat-counter">
-              <span className="stat-icon">🔄</span>
-              <span className="stat-number">{stats.totalUses.toLocaleString()}</span>
-              <span className="stat-label-text">conversions</span>
-            </span>
-            <span className="stat-divider">•</span>
-            <span className="stat-counter">
-              <span className="stat-icon">📄</span>
-              <span className="stat-number">{stats.totalFiles.toLocaleString()}</span>
-              <span className="stat-label-text">files processed</span>
-            </span>
-          </div>
-        )}
       </header>
 
       {/* Drop Zone */}
@@ -395,6 +380,23 @@ function App() {
                   </div>
                 )
               })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Global Stats */}
+      {(stats.totalUses > 0 || stats.totalFiles > 0) && (
+        <div className="global-stats">
+          <div className="global-stats-inner">
+            <div className="global-stat-item">
+              <span className="global-stat-number">{stats.totalUses.toLocaleString()}</span>
+              <span className="global-stat-label">Total Users Served</span>
+            </div>
+            <div className="global-stat-sep"></div>
+            <div className="global-stat-item">
+              <span className="global-stat-number">{stats.totalFiles.toLocaleString()}</span>
+              <span className="global-stat-label">Total Files Converted</span>
             </div>
           </div>
         </div>

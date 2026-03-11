@@ -174,49 +174,52 @@ body {
   font-size: 1.1rem;
 }
 
-/* === Stats Bar === */
-.stats-bar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 1.25rem;
-  margin-top: 1.25rem;
-  padding: 0.5rem 1.25rem;
-  background: var(--bg-card);
-  border: 1px solid var(--border-primary);
-  border-radius: 9999px;
-  display: inline-flex;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+/* === Global Stats === */
+.global-stats {
+  margin-top: 2rem;
+  padding: 0 1rem;
   animation: fadeIn 0.5s ease-out;
 }
 
-.stat-counter {
+.global-stats-inner {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
-  font-size: 0.8rem;
-  color: var(--text-secondary);
+  justify-content: center;
+  gap: 2.5rem;
+  padding: 1.25rem 2rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.04);
 }
 
-.stat-icon {
-  font-size: 0.85rem;
+.global-stat-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
 }
 
-.stat-number {
+.global-stat-number {
+  font-size: 1.5rem;
   font-weight: 700;
   color: var(--hq-red);
   font-family: 'JetBrains Mono', monospace;
-  font-size: 0.85rem;
+  letter-spacing: -0.02em;
 }
 
-.stat-label-text {
-  font-weight: 400;
+.global-stat-label {
+  font-size: 0.75rem;
+  font-weight: 500;
   color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
-.stat-divider {
-  color: var(--border-primary);
-  font-size: 0.6rem;
+.global-stat-sep {
+  width: 1px;
+  height: 2.5rem;
+  background: var(--border-primary);
 }
 
 /* === Drop Zone === */
