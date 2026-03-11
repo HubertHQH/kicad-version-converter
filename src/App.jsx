@@ -157,7 +157,7 @@ function App() {
       {/* Header */}
       <header className="app-header">
         <div className="app-logo">
-          <img src="https://www.huaqiu.com/public/images/huaqiu/index_logo_2026.png?v4" alt="华秋" className="app-logo-img" />
+          <img src="https://static.nextpcb.com/images/newNavIcon/logo2025.svg" alt="NextPCB" className="app-logo-img" />
           <span style={{ color: '#ccc', fontSize: '1.5rem', fontWeight: 300 }}>|</span>
           <h1 className="app-title">KiCad Version Converter</h1>
         </div>
@@ -367,7 +367,7 @@ function App() {
 
       {/* Footer */}
       <footer className="app-footer">
-        <a href="https://www.huaqiu.com" target="_blank" rel="noopener">华秋</a> KiCad Version Converter • Supports .kicad_sch, .kicad_sym, .kicad_pcb &amp; .kicad_mod • Lossy conversion — version-specific features will be removed
+        <a href="https://www.nextpcb.com" target="_blank" rel="noopener">NextPCB</a> KiCad Version Converter • Supports .kicad_sch, .kicad_sym, .kicad_pcb &amp; .kicad_mod • Lossy conversion — version-specific features will be removed
       </footer>
     </div>
   )
