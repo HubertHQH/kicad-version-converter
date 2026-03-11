@@ -107,9 +107,17 @@ body {
 }
 
 .app-logo-img {
-  height: 40px;
-  width: auto;
+  height: 36px;
+  width: 36px;
   object-fit: contain;
+  border-radius: 6px;
+}
+
+.app-logo-text {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0.02em;
 }
 
 .app-logo-icon {

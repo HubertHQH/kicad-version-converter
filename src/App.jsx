@@ -20,7 +20,7 @@ function App() {
     const validExts = ['.kicad_sch', '.kicad_sym', '.kicad_pcb', '.kicad_mod']
     const validFiles = Array.from(fileList).filter(f => validExts.some(ext => f.name.endsWith(ext)))
     if (validFiles.length === 0) {
-      alert('Please select .kicad_sch, .kicad_sym, .kicad_pcb, or .kicad_mod files')
+      alert('请选择 .kicad_sch、.kicad_sym、.kicad_pcb 或 .kicad_mod 文件')
       return
     }
 
@@ -40,7 +40,7 @@ function App() {
         label: info.label,
         isKicad10: info.isKicad10,
         isKicad9: info.isKicad9,
-        fileType: isFootprint ? 'Footprint' : (isPcb ? 'PCB' : (isSymLib ? 'Symbol Library' : 'Schematic')),
+        fileType: isFootprint ? '封装' : (isPcb ? 'PCB' : (isSymLib ? '符号库' : '原理图')),
         status: 'pending',
         result: null,
       }
@@ -84,7 +84,7 @@ function App() {
 
     for (let i = 0; i < updatedFiles.length; i++) {
       const f = updatedFiles[i]
-      allLogs.push(`\n━━━ Converting: ${f.name} → ${target.label} ━━━`)
+      allLogs.push(`\n━━━ 正在转换: ${f.name} → ${target.label} ━━━`)
 
       try {
         const result = await convertKicad(f.content, targetVersion)
@@ -99,8 +99,8 @@ function App() {
         })
       } catch (err) {
         updatedFiles[i] = { ...f, status: 'error', error: err.message }
-        allLogs.push(`ERROR: ${err.message}`)
-        allWarnings.push(`[${f.name}] Conversion failed: ${err.message}`)
+        allLogs.push(`错误: ${err.message}`)
+        allWarnings.push(`[${f.name}] 转换失败: ${err.message}`)
       }
     }
 
@@ -157,11 +157,12 @@ function App() {
       {/* Header */}
       <header className="app-header">
         <div className="app-logo">
-          <img src="https://static.nextpcb.com/images/newNavIcon/logo2025.svg" alt="NextPCB" className="app-logo-img" />
+          <img src="/huaqiu_logo.png" alt="华秋" className="app-logo-img" />
+          <span className="app-logo-text">华秋</span>
           <span style={{ color: '#ccc', fontSize: '1.5rem', fontWeight: 300 }}>|</span>
-          <h1 className="app-title">KiCad Version Converter</h1>
+          <h1 className="app-title">KiCad 版本转换器</h1>
         </div>
-        <p className="app-subtitle">Convert KiCad schematics, symbol libraries, PCBs &amp; footprints between versions</p>
+        <p className="app-subtitle">在线转换 KiCad 原理图、符号库、PCB 和封装文件的版本</p>
         <div className="version-badges">
           <span className="version-badge from">KiCad 10 / 9 / 8</span>
           <span className="version-arrow">→</span>
@@ -181,10 +182,10 @@ function App() {
           >
             <div className="drop-zone-icon">📂</div>
             <div className="drop-zone-title">
-              Drop .kicad_sch / .kicad_sym / .kicad_pcb / .kicad_mod files here
+              将 .kicad_sch / .kicad_sym / .kicad_pcb / .kicad_mod 文件拖放到此处
             </div>
             <div className="drop-zone-hint">
-              or click to browse • Supports schematics, symbol libraries, PCBs &amp; footprints
+              或点击浏览文件 • 支持原理图、符号库、PCB 和封装文件
             </div>
           </div>
           <input
@@ -203,7 +204,7 @@ function App() {
         <div className="fade-in">
           <div className="batch-controls">
             <div className="target-version-selector">
-              <label className="target-label">Target Version:</label>
+              <label className="target-label">目标版本：</label>
               {targetOptions.map(opt => (
                 <button
                   key={opt.key}
@@ -216,13 +217,13 @@ function App() {
             </div>
             <div className="batch-actions">
               <button className="btn btn-primary" onClick={handleConvert} disabled={converting}>
-                {converting ? '⏳ Converting...' : '🔄 Convert All'}
+                {converting ? '⏳ 正在转换...' : '🔄 开始转换'}
               </button>
               <button className="btn btn-ghost" onClick={reset}>
-                ✕ Clear
+                ✕ 清除
               </button>
               <button className="btn btn-ghost" onClick={() => fileInputRef.current?.click()}>
-                + Add Files
+                + 添加文件
               </button>
             </div>
 
@@ -244,7 +245,7 @@ function App() {
           <div className="file-list">
             {files.map((f, idx) => (
               <div key={idx} className="file-list-item">
-                <span>{f.fileType === 'PCB' ? '🔧' : (f.fileType === 'Footprint' ? '📦' : (f.fileType === 'Symbol Library' ? '🔣' : '📄'))}</span>
+                <span>{f.fileType === 'PCB' ? '🔧' : (f.fileType === '封装' ? '📦' : (f.fileType === '符号库' ? '🔣' : '📄'))}</span>
                 <span className="file-name">{f.name}</span>
                 <span className="file-info-meta">
                   {formatSize(f.size)}
@@ -253,9 +254,9 @@ function App() {
                   {f.label}
                 </span>
                 <span className={`file-status ${f.status}`}>
-                  {f.status === 'pending' && 'Ready'}
-                  {f.status === 'success' && '✓ Done'}
-                  {f.status === 'error' && '✗ Error'}
+                  {f.status === 'pending' && '就绪'}
+                  {f.status === 'success' && '✓ 完成'}
+                  {f.status === 'error' && '✗ 错误'}
                 </span>
               </div>
             ))}
@@ -272,10 +273,10 @@ function App() {
               <div className="result-icon">✓</div>
               <div>
                 <div className="result-title">
-                  Conversion Complete
+                  转换完成
                 </div>
                 <div className="result-subtitle">
-                  {results.successCount}/{results.fileCount} file(s) converted to {results.targetLabel}
+                  {results.successCount}/{results.fileCount} 个文件已转换为 {results.targetLabel}
                 </div>
               </div>
             </div>
@@ -286,15 +287,15 @@ function App() {
                   className="btn btn-success"
                   onClick={() => downloadFile(results.convertedFiles[0].name, results.convertedFiles[0].content)}
                 >
-                  ⬇ Download Converted File
+                  ⬇ 下载转换后的文件
                 </button>
               ) : (
                 <button className="btn btn-success" onClick={downloadAll}>
-                  ⬇ Download All ({results.convertedFiles.length} files)
+                  ⬇ 下载全部（{results.convertedFiles.length} 个文件）
                 </button>
               )}
               <button className="btn btn-ghost" onClick={reset}>
-                🔄 Convert Another
+                🔄 继续转换
               </button>
             </div>
           </div>
@@ -302,7 +303,7 @@ function App() {
           {/* Warnings */}
           {results.warnings.length > 0 && (
             <div className="warnings-panel">
-              <div className="warnings-title">⚠ Warnings</div>
+              <div className="warnings-title">⚠ 警告</div>
               <ul className="warnings-list">
                 {results.warnings.map((w, i) => (
                   <li key={i}>{w}</li>
@@ -320,7 +321,7 @@ function App() {
                   <span className="file-name">{f.name}</span>
                   <span className="file-info-meta">{formatSize(f.size)}</span>
                   <span className={`file-status ${f.status}`}>
-                    {f.status === 'success' && '✓ Converted'}
+                    {f.status === 'success' && '✓ 已转换'}
                     {f.status === 'error' && `✗ ${f.error}`}
                   </span>
                   {f.status === 'success' && (
@@ -341,7 +342,7 @@ function App() {
           <div className="log-section">
             <div className="log-header">
               <div className="log-title">
-                📋 Conversion Log
+                📋 转换日志
               </div>
             </div>
             <div className="log-container">
@@ -367,7 +368,7 @@ function App() {
 
       {/* Footer */}
       <footer className="app-footer">
-        <a href="https://www.nextpcb.com" target="_blank" rel="noopener">NextPCB</a> KiCad Version Converter • Supports .kicad_sch, .kicad_sym, .kicad_pcb &amp; .kicad_mod • Lossy conversion — version-specific features will be removed
+        <a href="https://www.huaqiu.com" target="_blank" rel="noopener">华秋</a> KiCad 版本转换器 • 支持 .kicad_sch、.kicad_sym、.kicad_pcb 和 .kicad_mod • 有损转换 — 高版本特有功能将被移除
       </footer>
     </div>
   )
