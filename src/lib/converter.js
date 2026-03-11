@@ -48,6 +48,7 @@ import {
 } from './pcb-converter.js';
 
 import {
+    applyFpK10toK9,
     applyFpK9toK8,
     applyFpK8toK7,
     FP_VERSIONS,
@@ -189,9 +190,8 @@ export async function convertKicad(input, targetVersionKey) {
             steps.push({ from: versionTable.KICAD10, to: versionTable.KICAD9, fn: applySymK10toK9 });
         } else if (isPcb) {
             steps.push({ from: versionTable.KICAD10, to: versionTable.KICAD9, fn: applyPcbK10toK9 });
-        } else {
-            // For Footprint K10 support not yet implemented, fallback to header-only
-            steps.push({ from: versionTable.KICAD10, to: versionTable.KICAD9, fn: applyK10toK9 });
+        } else if (isFootprint) {
+            steps.push({ from: versionTable.KICAD10, to: versionTable.KICAD9, fn: applyFpK10toK9 });
         }
     }
 

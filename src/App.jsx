@@ -228,7 +228,7 @@ function App() {
             <input
               ref={fileInputRef}
               type="file"
-              accept=".kicad_sch,.kicad_sym,.kicad_pcb"
+              accept=".kicad_sch,.kicad_sym,.kicad_pcb,.kicad_mod"
               multiple
               style={{ display: 'none' }}
               onChange={(e) => {

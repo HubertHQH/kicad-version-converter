@@ -2,7 +2,7 @@
 
 一个基于浏览器的工具，用于将 KiCad 原理图文件（`.kicad_sch`）、符号库文件（`.kicad_sym`）、PCB 文件（`.kicad_pcb`）和封装文件（`.kicad_mod`）进行版本降级转换，支持以下转换路径：
 
-- **KiCad 10 → KiCad 9**（原理图/符号库）
+- **KiCad 10 → KiCad 9**（原理图/符号库/PCB/封装）
 - **KiCad 9 → KiCad 8**
 - **KiCad 8 → KiCad 7**
 - **KiCad 10 → KiCad 7**（链式转换：10→9→8→7）
@@ -129,6 +129,13 @@
 | P27 | 移除 footprint `(attr ...)` 中的 K8 专有标志（`dnp`、`allow_missing_courtyard`） |
 | P28 | 移除顶层 `(generated ...)` 元素（调谐图案等 KiCad 8 特有功能，K7 不支持） |
 
+### 封装 (.kicad_mod) — KiCad 10 → KiCad 9（NF1-NF2）
+
+| 规则 | 说明 |
+|------|------|
+| NF1 | 文件头版本号降级（`version` → `20241229`，`generator_version` → `9.0`） |
+| NF2 | 移除 `(duplicate_pad_numbers_are_jumpers ...)`（K10 新增，K9 不存在） |
+
 ### 封装 (.kicad_mod) — KiCad 9 → KiCad 8（F1-F4）
 
 | 规则 | 说明 |
@@ -228,3 +235,5 @@ converter/
 - **`asset/kicad7/kicad-footprints-v7/`** — KiCad 7 格式的官方封装库
 
 三个版本均为 KiCad 官方封装库，包含 `Capacitor_SMD.pretty`、`Connector_USB.pretty` 等分类目录，可用于对比验证封装转换的正确性。
+
+- **`asset/kicad10/kicad-footprints-10.0.0-rc2/`** — KiCad 10 格式的官方封装库

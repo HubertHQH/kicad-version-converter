@@ -398,7 +398,7 @@ KiCad 8 不强制要求特定排序，元素顺序不同不影响加载。可以
      ▼             ▼
  ┌─────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
  │ 原理图   │  │ 符号库    │  │   PCB    │  │  封装    │
- │ N1-N8   │  │ NS1-NS8 │  │         │  │         │  ← K10→K9 转换
+ │ N1-N8   │  │ NS1-NS8 │  │ NP1-NP10│  │ NF1-NF2 │  ← K10→K9 转换
  │ R1-R8   │  │ S1-S4   │  │ P1-P9   │  │ F1-F4   │  ← K9→K8 转换
  │ R10-R15 │  │ S10-S14 │  │ P10-P26 │  │ F10-F18 │  ← K8→K7 转换
  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘
@@ -415,7 +415,7 @@ KiCad 8 不强制要求特定排序，元素顺序不同不影响加载。可以
 
 > [!NOTE]
 > PCB 文件使用独立的转换模块 `pcb-converter.js`，封装文件使用 `fp-converter.js`，均共享相同的 S-expression 解析器和统一转换入口。
-> KiCad 10 → KiCad 9 的转换支持原理图文件（N 系列规则）和符号库文件（NS 系列规则），PCB 和封装文件仅做文件头降级。
+> KiCad 10 → KiCad 9 的转换支持所有四种文件类型：原理图（N 系列规则）、符号库（NS 系列规则）、PCB（NP 系列规则）和封装（NF 系列规则）。
 
 ### 实现语言: JavaScript/Node.js
 
@@ -444,11 +444,10 @@ KiCad 8 不强制要求特定排序，元素顺序不同不影响加载。可以
 > - ~~**符号库文件**: `.kicad_sym` 符号库文件也有版本差异，需要单独处理~~ ✅ 已实现
 > - ~~**PCB 文件**: `.kicad_pcb` 文件也有类似的版本问题~~ ✅ 已实现
 > - ~~**封装文件**: `.kicad_mod` 封装文件也需要降级处理~~ ✅ 已实现
-> - ~~**KiCad 10 支持**: 需要支持 KiCad 10 文件的降级转换~~ ✅ 已实现（原理图 N1-N8 规则，符号库 NS1-NS8 规则，PCB NP1-NP10 规则）
+> - ~~**KiCad 10 支持**: 需要支持 KiCad 10 文件的降级转换~~ ✅ 已实现（原理图 N1-N8，符号库 NS1-NS8，PCB NP1-NP10，封装 NF1-NF2）
 > - **多 Sheet 项目**: 每个 `.kicad_sch` 文件都需要单独转换
 > - **项目文件**: `.kicad_pro` 项目文件也需要版本降级处理
 > - **行长度限制**: KiCad 8 对单行长度有限制，嵌入图片的 base64 数据需逐行输出。
-> - ~~**KiCad 10 PCB/封装**: K10 的 PCB 和封装文件目前仅做文件头降级，尚未研究详细格式差异。~~ ✅ PCB 已实现（NP1-NP10），封装文件尚未实现。
 
 > [!IMPORTANT]
 > 该工具的目标是"尽力降级"——保留所有核心电路信息（连接性、元器件、值、位置），安全移除或转换新版本新增的非关键格式特性。支持从 KiCad 10 一路降级到 KiCad 7。
@@ -1042,6 +1041,22 @@ KiCad 8 和 KiCad 7 之间的 PCB 格式差异更大：
 ---
 
 ## 封装降级转换规则
+
+### K10 → K9 规则（NF1-NF2）
+
+通过对比 `asset/kicad10/kicad-footprints-10.0.0-rc2/` 和 `asset/kicad9/kicad-footprints-9.0.7/` 中的封装文件（如 `C_0402_1005Metric`、`CP_Elec_3x5.3`、`PinHeader_1x02_P2.54mm_Vertical`），KiCad 10 封装与 KiCad 9 封装差异非常小：
+
+| 差异点 | KiCad 10 | KiCad 9 |
+|--------|----------|--------|
+| version | `20260206` | `20241229` |
+| generator_version | `"10.0"` | `"9.0"` |
+| `duplicate_pad_numbers_are_jumpers` | `(duplicate_pad_numbers_are_jumpers no)` — 所有封装都有 | ❌ 不存在 |
+| 3D 模型路径变量 | `${KICAD10_3DMODEL_DIR}` | `${KICAD9_3DMODEL_DIR}`（环境相关，不转换） |
+
+| 规则 | 说明 |
+|------|------|
+| NF1 | 文件头降级: `version 20260206 → 20241229`，`generator_version "10.0" → "9.0"` |
+| NF2 | 移除 `(duplicate_pad_numbers_are_jumpers ...)` 节点 |
 
 ### K9 → K8 规则（F1-F4）
 

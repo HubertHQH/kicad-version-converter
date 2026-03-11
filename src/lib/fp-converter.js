@@ -2,9 +2,14 @@
  * KiCad Footprint (.kicad_mod) Version Converter
  * 
  * Supports chain-based downgrade conversions for standalone footprint files:
+ *   KiCad 10 → KiCad 9
  *   KiCad 9 → KiCad 8
  *   KiCad 8 → KiCad 7
- *   KiCad 9 → KiCad 7 (chained: 9→8→7)
+ *   KiCad 10 → KiCad 7 (chained: 10→9→8→7)
+ * 
+ * Conversion rules (K10 → K9): NF1-NF2
+ *   NF1: Header downgrade (version, generator_version)
+ *   NF2: Remove (duplicate_pad_numbers_are_jumpers ...) from footprint
  * 
  * Conversion rules (K9 → K8): F1-F4
  *   F1: Header downgrade (version, generator_version)
@@ -39,9 +44,42 @@ const FP_VERSIONS = {
     KICAD7: { version: '20211014', generatorVersion: null, label: 'KiCad 7' },
     KICAD8: { version: '20240108', generatorVersion: '8.0', label: 'KiCad 8' },
     KICAD9: { version: '20241229', generatorVersion: '9.0', label: 'KiCad 9' },
+    KICAD10: { version: '20260206', generatorVersion: '10.0', label: 'KiCad 10' },
 };
 
 export { FP_VERSIONS };
+
+// ============================================================
+//  KiCad 10 → KiCad 9 Conversion (Footprint)
+// ============================================================
+
+export async function applyFpK10toK9(ast, log, warnings) {
+    const stats = {
+        nf1_header: false,
+        nf2_duplicate_pad: 0,
+    };
+
+    // NF1: Header downgrade
+    setChildValue(ast, 'version', FP_VERSIONS.KICAD9.version);
+    const existingGenVer = findChild(ast, 'generator_version');
+    if (existingGenVer) {
+        setChildValue(ast, 'generator_version', FP_VERSIONS.KICAD9.generatorVersion);
+    }
+    stats.nf1_header = true;
+    log.push(`NF1: Version → ${FP_VERSIONS.KICAD9.version}, generator_version → "${FP_VERSIONS.KICAD9.generatorVersion}"`);
+
+    // NF2: Remove (duplicate_pad_numbers_are_jumpers ...)
+    const removed = removeAllChildren(ast, 'duplicate_pad_numbers_are_jumpers');
+    if (removed > 0) {
+        stats.nf2_duplicate_pad += removed;
+        log.push(`NF2: Removed ${removed} (duplicate_pad_numbers_are_jumpers) element(s)`);
+    }
+
+    // Summary
+    log.push('--- K10→K9 Footprint Summary ---');
+    log.push(`NF1 Header downgraded: ${stats.nf1_header ? 'Yes' : 'No'}`);
+    log.push(`NF2 duplicate_pad_numbers_are_jumpers removed: ${stats.nf2_duplicate_pad}`);
+}
 
 // ============================================================
 //  KiCad 9 → KiCad 8 Conversion (Footprint)
