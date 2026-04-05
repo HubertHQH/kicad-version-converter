@@ -15,7 +15,7 @@
  *   NP5: Collect all net names, assign IDs, insert net declaration block
  *   NP6: Convert net references: name→ID in segment/via/pad/zone
  *   NP7: Remove via capping/covering/plugging/filling
- *   NP8: Zone fill: remove island_removal_mode, add filled_areas_thickness
+ *   NP8: Zone fill: remove island_removal_mode, remove (island) from filled_polygon, add filled_areas_thickness
  *   NP9: Remove footprint units/duplicate_pad_numbers_are_jumpers
  *   NP10: Restore footprint Datasheet/Description unlocked + font thickness
  * 
@@ -459,12 +459,23 @@ function transformPcbK10toK9(node, netMap, stats, log, warnings) {
 
     // NP8: Zone fill changes
     // Remove (island_removal_mode ...) from fill; add (filled_areas_thickness no)
+    // Also remove (island ...) from filled_polygon nodes (K10-only marker)
     if (node.name === 'zone') {
         const fillNode = findChild(node, 'fill');
         if (fillNode) {
             const removedIsland = removeAllChildren(fillNode, 'island_removal_mode');
             if (removedIsland > 0) {
                 stats.np8_zone_fill += removedIsland;
+            }
+        }
+
+        // Remove (island ...) from filled_polygon children — K10 marks island polygons
+        // with (island yes) inside filled_polygon, which K9 doesn't recognize
+        const filledPolygons = findChildren(node, 'filled_polygon');
+        for (const fp of filledPolygons) {
+            const removedFpIsland = removeAllChildren(fp, 'island');
+            if (removedFpIsland > 0) {
+                stats.np8_zone_fill += removedFpIsland;
             }
         }
 
