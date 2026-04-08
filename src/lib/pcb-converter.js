@@ -18,6 +18,7 @@
  *   NP8: Zone fill: remove island_removal_mode, remove (island) from filled_polygon, add filled_areas_thickness
  *   NP9: Remove footprint units/duplicate_pad_numbers_are_jumpers
  *   NP10: Restore footprint Datasheet/Description unlocked + font thickness
+ *   NP11: Remove (radius ...) from gr_rect/fp_rect (K10 rounded rect, not supported in K9)
  * 
  * Conversion rules (K9 → K8): P1-P9
  *   P1: Header version/generator downgrade
@@ -218,6 +219,7 @@ export async function applyPcbK10toK9(ast, log, warnings) {
         np8_zone_fill: 0,
         np9_footprint_attrs: 0,
         np10_fp_property: 0,
+        np11_rounded_rect: 0,
     };
 
     // NP1: Header downgrade
@@ -278,6 +280,7 @@ export async function applyPcbK10toK9(ast, log, warnings) {
     log.push(`NP8 zone fill fixed: ${stats.np8_zone_fill}`);
     log.push(`NP9 footprint attrs removed: ${stats.np9_footprint_attrs}`);
     log.push(`NP10 footprint property restored: ${stats.np10_fp_property}`);
+    log.push(`NP11 rounded rect radius removed: ${stats.np11_rounded_rect}`);
 }
 
 /**
@@ -544,6 +547,16 @@ function transformPcbK10toK9(node, netMap, stats, log, warnings) {
                     }
                 }
             }
+        }
+    }
+
+    // NP11: Remove (radius ...) from gr_rect and fp_rect
+    // K10 supports rounded rectangles with (radius N) inside gr_rect/fp_rect;
+    // K9 does not recognize this attribute and will error on load.
+    if (node.name === 'gr_rect' || node.name === 'fp_rect') {
+        const removed = removeAllChildren(node, 'radius');
+        if (removed > 0) {
+            stats.np11_rounded_rect += removed;
         }
     }
 

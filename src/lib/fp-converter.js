@@ -7,9 +7,10 @@
  *   KiCad 8 → KiCad 7
  *   KiCad 10 → KiCad 7 (chained: 10→9→8→7)
  * 
- * Conversion rules (K10 → K9): NF1-NF2
+ * Conversion rules (K10 → K9): NF1-NF3
  *   NF1: Header downgrade (version, generator_version)
  *   NF2: Remove (duplicate_pad_numbers_are_jumpers ...) from footprint
+ *   NF3: Remove (radius ...) from fp_rect (K10 rounded rect, not supported in K9)
  * 
  * Conversion rules (K9 → K8): F1-F4
  *   F1: Header downgrade (version, generator_version)
@@ -57,6 +58,7 @@ export async function applyFpK10toK9(ast, log, warnings) {
     const stats = {
         nf1_header: false,
         nf2_duplicate_pad: 0,
+        nf3_rounded_rect: 0,
     };
 
     // NF1: Header downgrade
@@ -75,10 +77,36 @@ export async function applyFpK10toK9(ast, log, warnings) {
         log.push(`NF2: Removed ${removed} (duplicate_pad_numbers_are_jumpers) element(s)`);
     }
 
+    // NF3: Remove (radius ...) from fp_rect — K10 rounded rectangle support
+    transformFpK10toK9(ast, stats, log, warnings);
+
     // Summary
     log.push('--- K10→K9 Footprint Summary ---');
     log.push(`NF1 Header downgraded: ${stats.nf1_header ? 'Yes' : 'No'}`);
     log.push(`NF2 duplicate_pad_numbers_are_jumpers removed: ${stats.nf2_duplicate_pad}`);
+    log.push(`NF3 rounded rect radius removed: ${stats.nf3_rounded_rect}`);
+}
+
+/**
+ * Recursive transformation for K10→K9 Footprint.
+ * Handles NF3: Remove (radius ...) from fp_rect nodes.
+ */
+function transformFpK10toK9(node, stats, log, warnings) {
+    if (!node || node.type !== 'list') return;
+
+    // NF3: Remove (radius ...) from fp_rect
+    // K10 supports rounded rectangles with (radius N) inside fp_rect;
+    // K9 does not recognize this attribute and will error on load.
+    if (node.name === 'fp_rect') {
+        const removed = removeAllChildren(node, 'radius');
+        if (removed > 0) {
+            stats.nf3_rounded_rect += removed;
+        }
+    }
+
+    for (const child of node.children) {
+        transformFpK10toK9(child, stats, log, warnings);
+    }
 }
 
 // ============================================================
