@@ -11,6 +11,7 @@ node_modules
 dist
 dist-ssr
 *.local
+kicad9_format_research.md
 
 # Editor directories and files
 .vscode/*
