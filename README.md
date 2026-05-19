@@ -91,7 +91,23 @@
 | S13 | `effects`/`font` 中 `(hide yes)` → 裸 `hide`，`(bold yes)` → 裸 `bold`，`(italic yes)` → 裸 `italic` |
 | S14 | 移除 `(pin_numbers hide)` 节点；`pin_names` 中移除 `hide` 标记 |
 
-### PCB (.kicad_pcb) — KiCad 9 → KiCad 8（P1-P9, P21-P23）
+### PCB (.kicad_pcb) — KiCad 10 → KiCad 9（NP1-NP11）
+
+| 规则 | 说明 |
+|------|------|
+| NP1 | 文件头版本号降级（`version` → `20241229`，`generator_version` → `9.0`） |
+| NP2 | `tenting` 嵌套格式转紧凑格式：`(tenting (front yes) (back yes))` → `(tenting front back)` |
+| NP3 | 移除 setup 中的 K10 过孔处理属性（`covering`、`plugging`、`capping`、`filling`） |
+| NP4 | 恢复 K9 的 pcbplotparams 参数（`hpglpennumber`、`hpglpenspeed`、`hpglpendiameter`、`plotinvisibletext`）；修复浮点格式 |
+| NP5 | 收集所有网络名称（从 `segment`/`arc`/`via`/`zone`/`pad`/`gr_rect`/`gr_arc`/`gr_line`/`gr_poly`/`gr_circle`），分配 ID，在 setup 之后插入 `(net ID "name")` 声明块 |
+| NP6 | 转换网络引用：名称→ID。`segment`/`arc`/`via`/`gr_rect`/`gr_arc`/`gr_line`/`gr_poly`/`gr_circle` 中 `(net "name")` → `(net ID)`；`pad` 中 `(net "name")` → `(net ID "name")`；`zone` 中 `(net "name")` → `(net ID)` + 添加 `(net_name "name")` |
+| NP7 | 移除 via 中的 `capping`/`covering`/`plugging`/`filling` 属性 |
+| NP8 | zone fill 修复：移除 `(island_removal_mode ...)`，移除 `filled_polygon` 中的 `(island ...)`，添加 `(filled_areas_thickness no)` |
+| NP9 | 移除 footprint 级别的 K10 专有属性（`units`、`duplicate_pad_numbers_are_jumpers`、`point`、`component_classes`） |
+| NP10 | 恢复 footprint 中 Datasheet/Description 属性的 `(unlocked yes)` 和字体 `(thickness 0.15)` |
+| NP11 | 移除 `gr_rect`/`fp_rect` 中的 `(radius ...)`（K10 圆角矩形功能，K9 不支持） |
+
+### PCB (.kicad_pcb) — KiCad 9 → KiCad 8（P1-P9, P21-P23, P27）
 
 | 规则 | 说明 |
 |------|------|
@@ -107,6 +123,7 @@
 | P21 | dimension style 中移除 `(arrow_direction ...)`，`(keep_text_aligned yes)` → 裸原子；dimension format 中 `(suppress_zeroes yes)` → 裸原子 |
 | P22 | 移除 zone 中的 `(placement ...)`（KiCad 9 多通道自动放置区域功能，K8 不支持） |
 | P23 | pad teardrops 中 `(curved_edges ...)` → `(curve_points ...)`（K9 重命名，K8 不认识） |
+| P27 | `(solder_paste_margin_ratio ...)` → `(solder_paste_ratio ...)`（K9 重命名，K8 使用旧名称） |
 
 ### PCB (.kicad_pcb) — KiCad 8 → KiCad 7（P10-P28）
 

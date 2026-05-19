@@ -166,7 +166,10 @@ function collectAllNetNames(ast) {
         // arc: (net "name")  — curved traces
         // via: (net "name")
         // zone: (net "name")
-        if (node.name === 'segment' || node.name === 'arc' || node.name === 'via' || node.name === 'zone') {
+        // gr_rect/gr_arc/gr_line/gr_poly/gr_circle: (net "name") on copper layers
+        if (node.name === 'segment' || node.name === 'arc' || node.name === 'via' || node.name === 'zone'
+            || node.name === 'gr_rect' || node.name === 'gr_arc' || node.name === 'gr_line'
+            || node.name === 'gr_poly' || node.name === 'gr_circle') {
             const netNode = findChild(node, 'net');
             if (netNode && netNode.children.length > 0) {
                 const nameChild = netNode.children[0];
@@ -382,9 +385,11 @@ function applyNP4RestoreK9PlotParams(setupNode, stats, log) {
 function transformPcbK10toK9(node, netMap, stats, log, warnings) {
     if (!node || node.type !== 'list') return;
 
-    // NP6: Convert net references in segment, arc, and via
+    // NP6: Convert net references in segment, arc, via, and graphical elements
     // K10: (net "name") → K9: (net ID)
-    if (node.name === 'segment' || node.name === 'arc' || node.name === 'via') {
+    if (node.name === 'segment' || node.name === 'arc' || node.name === 'via'
+        || node.name === 'gr_rect' || node.name === 'gr_arc' || node.name === 'gr_line'
+        || node.name === 'gr_poly' || node.name === 'gr_circle') {
         const netNode = findChild(node, 'net');
         if (netNode && netNode.children.length > 0) {
             const nameChild = netNode.children[0];
