@@ -8,6 +8,8 @@ A browser-based tool for downgrading KiCad schematic files (`.kicad_sch`), symbo
 - **KiCad 10 → KiCad 7** (chained: 10→9→8→7)
 - **KiCad 9 → KiCad 7** (chained: 9→8→7)
 
+You can try it here: https://www.nextpcb.com/kicad-version-converter
+
 ## Features
 
 - **Client-side conversion**: Purely front-end implementation — no server required, files are never uploaded anywhere
