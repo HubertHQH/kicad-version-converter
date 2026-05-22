@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import { convertKicad, detectVersion } from './lib/converter'
 import './App.css'
 
@@ -8,15 +8,7 @@ function App() {
   const [converting, setConverting] = useState(false)
   const [dragActive, setDragActive] = useState(false)
   const [targetVersion, setTargetVersion] = useState('KICAD8')
-  const [stats, setStats] = useState({ totalUses: 0, totalFiles: 0 })
   const fileInputRef = useRef(null)
-
-  useEffect(() => {
-    fetch('/api/stats')
-      .then(r => r.json())
-      .then(data => setStats(data))
-      .catch(() => {}) // Graceful fail for local dev
-  }, [])
 
   const targetOptions = [
     { key: 'KICAD9', label: 'KiCad 9', version: '20250114' },
@@ -123,17 +115,6 @@ function App() {
     })
     setConverting(false)
 
-    // Update global stats
-    if (convertedFiles.length > 0) {
-      fetch('/api/stats', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fileCount: convertedFiles.length }),
-      })
-        .then(r => r.json())
-        .then(data => setStats(data))
-        .catch(() => {})
-    }
   }, [files, targetVersion])
 
   const downloadFile = useCallback((name, content) => {
@@ -385,22 +366,6 @@ function App() {
         </div>
       )}
 
-      {/* Global Stats */}
-      {(stats.totalUses > 0 || stats.totalFiles > 0) && (
-        <div className="global-stats">
-          <div className="global-stats-inner">
-            <div className="global-stat-item">
-              <span className="global-stat-number">{stats.totalUses.toLocaleString()}</span>
-              <span className="global-stat-label">Total Users Served</span>
-            </div>
-            <div className="global-stat-sep"></div>
-            <div className="global-stat-item">
-              <span className="global-stat-number">{stats.totalFiles.toLocaleString()}</span>
-              <span className="global-stat-label">Total Files Converted</span>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Footer */}
       <footer className="app-footer">
