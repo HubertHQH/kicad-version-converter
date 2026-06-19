@@ -14,6 +14,7 @@ function App() {
     { key: 'KICAD9', label: 'KiCad 9', version: '20250114' },
     { key: 'KICAD8', label: 'KiCad 8', version: '20231120' },
     { key: 'KICAD7', label: 'KiCad 7', version: '20230121' },
+    { key: 'KICAD6', label: 'KiCad 6', version: '20211123' },
   ]
 
   const handleFiles = useCallback(async (fileList) => {
@@ -40,16 +41,24 @@ function App() {
         label: info.label,
         isKicad10: info.isKicad10,
         isKicad9: info.isKicad9,
+        isKicad8: info.isKicad8,
+        isKicad7: info.isKicad7,
         fileType: isFootprint ? '封装' : (isPcb ? 'PCB' : (isSymLib ? '符号库' : '原理图')),
         status: 'pending',
         result: null,
       }
     }))
 
-    // Auto-set target version: if any file is K10 → default K9, if K9 → default K8, else K7
+    // Auto-set target: default to one major version below the highest detected file.
     const hasKicad10 = parsed.some(f => f.isKicad10)
     const hasKicad9 = parsed.some(f => f.isKicad9)
-    setTargetVersion(hasKicad10 ? 'KICAD9' : (hasKicad9 ? 'KICAD8' : 'KICAD7'))
+    const hasKicad8 = parsed.some(f => f.isKicad8)
+    setTargetVersion(
+      hasKicad10 ? 'KICAD9'
+        : hasKicad9 ? 'KICAD8'
+          : hasKicad8 ? 'KICAD7'
+            : 'KICAD6'
+    )
 
     setFiles(parsed)
     setResults(null)
@@ -149,6 +158,7 @@ function App() {
     if (label === 'KiCad 9') return 'k9'
     if (label === 'KiCad 8') return 'k8'
     if (label === 'KiCad 7') return 'k7'
+    if (label === 'KiCad 6') return 'k6'
     return ''
   }
 
@@ -164,9 +174,9 @@ function App() {
         </div>
         <p className="app-subtitle">在线转换 KiCad 原理图、符号库、PCB 和封装文件的版本</p>
         <div className="version-badges">
-          <span className="version-badge from">KiCad 10 / 9 / 8</span>
+          <span className="version-badge from">KiCad 10 / 9 / 8 / 7</span>
           <span className="version-arrow">→</span>
-          <span className="version-badge to">KiCad 9 / 8 / 7</span>
+          <span className="version-badge to">KiCad 9 / 8 / 7 / 6</span>
         </div>
       </header>
 

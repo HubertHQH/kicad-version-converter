@@ -2,23 +2,31 @@
  * KiCad Multi-Version Converter
  * 
  * Supports chain-based downgrade conversions for all file types:
- *   .kicad_sch (Schematic), .kicad_sym (Symbol Library), .kicad_pcb (PCB)
+ *   .kicad_sch (Schematic), .kicad_sym (Symbol Library), .kicad_pcb (PCB), .kicad_mod (Footprint)
  * 
  * Conversion paths:
  *   KiCad 10 → KiCad 9
  *   KiCad 9 → KiCad 8
  *   KiCad 8 → KiCad 7
- *   KiCad 10 → KiCad 7 (chained: 10→9→8→7)
+ *   KiCad 7 → KiCad 6
+ *   Chained downgrades, e.g. KiCad 10 → KiCad 6 (10→9→8→7→6)
  * 
- * Schematic conversion rules (K10 → K9): N1-N8
+ * Schematic conversion rules (K10 → K9): N1-N10
  * Schematic conversion rules (K9 → K8): R1-R8
  * Schematic conversion rules (K8 → K7): R10-R15
+ * Schematic conversion rules (K7 → K6): R20-R30
  * Symbol library conversion rules (K10 → K9): NS1-NS8
  * Symbol library conversion rules (K9 → K8): S1-S4
  * Symbol library conversion rules (K8 → K7): S10-S14
- * PCB conversion rules (K10 → K9): NP1-NP10
- * PCB conversion rules (K9 → K8): P1-P9
- * PCB conversion rules (K8 → K7): P10-P20
+ * Symbol library conversion rules (K7 → K6): S20-S23
+ * PCB conversion rules (K10 → K9): NP1-NP11
+ * PCB conversion rules (K9 → K8): P1-P9, P21-P23, P27
+ * PCB conversion rules (K8 → K7): P10-P28
+ * PCB conversion rules (K7 → K6): P40-P49
+ * Footprint conversion rules (K10 → K9): NF1-NF3
+ * Footprint conversion rules (K9 → K8): F1-F4
+ * Footprint conversion rules (K8 → K7): F10-F18
+ * Footprint conversion rules (K7 → K6): F20-F26
  */
 
 import {
@@ -37,6 +45,7 @@ import {
     applySymK10toK9,
     applySymK9toK8,
     applySymK8toK7,
+    applySymK7toK6,
     SYM_VERSIONS,
 } from './sym-converter.js';
 
@@ -44,6 +53,7 @@ import {
     applyPcbK10toK9,
     applyPcbK9toK8,
     applyPcbK8toK7,
+    applyPcbK7toK6,
     PCB_VERSIONS,
 } from './pcb-converter.js';
 
@@ -51,6 +61,7 @@ import {
     applyFpK10toK9,
     applyFpK9toK8,
     applyFpK8toK7,
+    applyFpK7toK6,
     FP_VERSIONS,
 } from './fp-converter.js';
 
@@ -58,6 +69,7 @@ import {
 
 // Schematic (.kicad_sch) versions
 const VERSIONS = {
+    KICAD6: { version: '20211123', generatorVersion: null, label: 'KiCad 6' },
     KICAD7: { version: '20230121', generatorVersion: null, label: 'KiCad 7' },
     KICAD8: { version: '20231120', generatorVersion: '8.0', label: 'KiCad 8' },
     KICAD9: { version: '20250114', generatorVersion: '9.0', label: 'KiCad 9' },
@@ -96,36 +108,50 @@ export function detectVersion(input) {
         versionTable = FP_VERSIONS;
     }
 
-    // Determine which major version this corresponds to
+    // Determine which major version this corresponds to.
+    // Each major version is identified by being strictly greater than the
+    // stamp of the version below it (numbers are date stamps).
     const versionNum = parseInt(version);
     let detectedVersion = null;
     let label = 'Unknown';
+    let detectedKey = null;
 
     const k9VersionNum = parseInt(versionTable.KICAD9.version);
     const k8VersionNum = parseInt(versionTable.KICAD8.version);
     const k7VersionNum = parseInt(versionTable.KICAD7.version);
+    const k6VersionNum = versionTable.KICAD6 ? parseInt(versionTable.KICAD6.version) : -1;
 
     if (versionNum > k9VersionNum) {
         detectedVersion = versionTable.KICAD10;
         label = 'KiCad 10';
+        detectedKey = 'KICAD10';
     } else if (versionNum > k8VersionNum) {
         detectedVersion = versionTable.KICAD9;
         label = 'KiCad 9';
+        detectedKey = 'KICAD9';
     } else if (versionNum > k7VersionNum) {
         detectedVersion = versionTable.KICAD8;
         label = 'KiCad 8';
-    } else if (versionNum >= 20200310) {
-        // S-expression format starts from KiCad 6
+        detectedKey = 'KICAD8';
+    } else if (versionNum > k6VersionNum) {
         detectedVersion = versionTable.KICAD7;
         label = 'KiCad 7';
+        detectedKey = 'KICAD7';
+    } else if (versionNum >= 20200310) {
+        // S-expression format starts from KiCad 6
+        detectedVersion = versionTable.KICAD6 || versionTable.KICAD7;
+        label = 'KiCad 6';
+        detectedKey = 'KICAD6';
     } else {
         label = `v${version}`;
     }
 
     const isKicad10 = versionNum > k9VersionNum;
     const isKicad9 = versionNum > k8VersionNum;
+    const isKicad8 = versionNum > k7VersionNum;
+    const isKicad7 = versionNum > k6VersionNum;
 
-    return { version, generatorVersion, detectedVersion, label, isKicad9, isKicad10 };
+    return { version, generatorVersion, detectedVersion, label, detectedKey, isKicad7, isKicad8, isKicad9, isKicad10 };
 }
 
 /**
@@ -174,6 +200,7 @@ export async function convertKicad(input, targetVersionKey) {
     const k9VersionNum = parseInt(versionTable.KICAD9.version);
     const k8VersionNum = parseInt(versionTable.KICAD8.version);
     const k7VersionNum = parseInt(versionTable.KICAD7.version);
+    const k6VersionNum = versionTable.KICAD6 ? parseInt(versionTable.KICAD6.version) : -1;
 
     if (inputVersionNum <= targetVersionNum) {
         warnings.push(`File version ${inputVersion} is already ${targetVersion.label} or earlier. No conversion needed.`);
@@ -218,6 +245,19 @@ export async function convertKicad(input, targetVersionKey) {
             steps.push({ from: versionTable.KICAD8, to: versionTable.KICAD7, fn: applySymK8toK7 });
         } else {
             steps.push({ from: versionTable.KICAD8, to: versionTable.KICAD7, fn: applyK8toK7 });
+        }
+    }
+
+    // K7 → K6 step
+    if (inputVersionNum > k6VersionNum && targetVersionNum <= k6VersionNum) {
+        if (isFootprint) {
+            steps.push({ from: versionTable.KICAD7, to: versionTable.KICAD6, fn: applyFpK7toK6 });
+        } else if (isPcb) {
+            steps.push({ from: versionTable.KICAD7, to: versionTable.KICAD6, fn: applyPcbK7toK6 });
+        } else if (isSymbolLib) {
+            steps.push({ from: versionTable.KICAD7, to: versionTable.KICAD6, fn: applySymK7toK6 });
+        } else {
+            steps.push({ from: versionTable.KICAD7, to: versionTable.KICAD6, fn: applyK7toK6 });
         }
     }
 
@@ -814,4 +854,410 @@ function convertBitmapToPng(base64Data, mimeType) {
         };
         img.src = `data:${mimeType};base64,${base64Data}`;
     });
+}
+
+// ============================================================
+//  KiCad 7 → KiCad 6 Conversion (Schematic, R20-series rules)
+// ============================================================
+//
+// KiCad 7 introduced several schematic-format changes over KiCad 6. The main
+// structural one is symbol instancing: K7 stores per-symbol/per-sheet
+// (instances (project ...)) blocks, while K6 keeps a single global
+// (symbol_instances ...) + (sheet_instances ...) table at the root and tags
+// each placed-symbol property with an (id N). This conversion rebuilds that
+// legacy table and re-adds the property ids, then strips K7-only features.
+//
+// NOTE: K6 hierarchical instance paths are reconstructed heuristically from the
+// K7 (instances) data; deeply nested hierarchies should be re-opened in KiCad 6
+// to confirm reference designators survived. Verify output in KiCad 6.
+
+const STD_PROPERTY_IDS = {
+    'Reference': 0, 'Value': 1, 'Footprint': 2, 'Datasheet': 3,
+    'ki_keywords': 4, 'ki_description': 5, 'ki_fp_filters': 6,
+};
+
+async function applyK7toK6(ast, log, warnings) {
+    const stats = {
+        r20_header: false,
+        r21_k7_features: 0,
+        r21b_root_drawings: 0,
+        r22_exclude_from_sim: 0,
+        r23_dnp_assembly: 0,
+        r24_pin_attrs: 0,
+        r25_pin_uuid_blocks: 0,
+        r26_property_ids: 0,
+        r27_sheet_properties: 0,
+        r28_instances: 0,
+        r29_per_object_instances: 0,
+        r30_fill_colors: 0,
+    };
+
+    // R20: Header downgrade (version → 20211123; K7 schematics have no generator_version)
+    setChildValue(ast, 'version', VERSIONS.KICAD6.version);
+    removeChild(ast, 'generator_version');
+    stats.r20_header = true;
+    log.push(`R20: Version → ${VERSIONS.KICAD6.version}, removed generator_version`);
+
+    // R21: Remove K7-only features that K6 cannot represent (lossy)
+    const k7Features = ['text_box', 'textbox', 'simulation_model', 'sim_model', 'netclass_flag', 'directive_label'];
+    for (const name of k7Features) {
+        const removed = removeDescendantsByName(ast, name);
+        if (removed > 0) {
+            stats.r21_k7_features += removed;
+            warnings.push(`Removed ${removed} (${name}) element(s) - KiCad 7 feature not available in KiCad 6`);
+        }
+    }
+
+    // R21b: Remove root-level graphic drawings (rectangle, circle, polyline, arc, bezier)
+    // KiCad 6 schematics do not support root-level graphic drawing primitives
+    const rootDrawings = ['rectangle', 'circle', 'polyline', 'arc', 'bezier'];
+    if (ast && ast.children) {
+        const beforeCount = ast.children.length;
+        ast.children = ast.children.filter(c => !(c.type === 'list' && rootDrawings.includes(c.name)));
+        const removed = beforeCount - ast.children.length;
+        if (removed > 0) {
+            stats.r21b_root_drawings += removed;
+            warnings.push(`Removed ${removed} root-level graphic drawing(s) (rectangle/circle/polyline/arc/bezier) - not supported in KiCad 6 schematics`);
+        }
+    }
+
+    // R28: Rebuild the legacy global symbol/sheet instance table (before removing
+    // the per-object (instances) blocks that it is derived from).
+    stats.r28_instances += buildLegacySchematicInstances(ast, log);
+
+    // R22-R27, R29-R30: recursive transformation
+    transformK7toK6(ast, stats, log, warnings);
+
+    // R29: Remove the now-redundant per-object (instances ...) blocks
+    stats.r29_per_object_instances += removeDescendantsByName(ast, 'instances');
+
+    // Summary
+    log.push('--- K7→K6 Summary ---');
+    log.push(`R20 Header downgraded: ${stats.r20_header ? 'Yes' : 'No'}`);
+    log.push(`R21 K7-only features removed: ${stats.r21_k7_features}`);
+    log.push(`R21b Root-level drawings removed: ${stats.r21b_root_drawings}`);
+    log.push(`R22 exclude_from_sim removed: ${stats.r22_exclude_from_sim}`);
+    log.push(`R23 symbol/sheet dnp+assembly flags removed: ${stats.r23_dnp_assembly}`);
+    log.push(`R24 pin hide/alternate removed: ${stats.r24_pin_attrs}`);
+    log.push(`R25 placed-symbol pin uuid blocks removed: ${stats.r25_pin_uuid_blocks}`);
+    log.push(`R26 legacy property ids added: ${stats.r26_property_ids}`);
+    log.push(`R27 sheet property names/ids normalized: ${stats.r27_sheet_properties}`);
+    log.push(`R28 symbol_instances table rebuilt: ${stats.r28_instances}`);
+    log.push(`R29 per-object instances removed: ${stats.r29_per_object_instances}`);
+    log.push(`R30 fill colors downgraded: ${stats.r30_fill_colors}`);
+}
+
+function transformK7toK6(node, stats, log, warnings) {
+    if (!node || node.type !== 'list') return;
+
+    // R22: Remove exclude_from_sim from ALL nodes (K6 has no simulation exclusion)
+    {
+        const removed = removeAllChildren(node, 'exclude_from_sim');
+        if (removed > 0) stats.r22_exclude_from_sim += removed;
+    }
+
+    // R23: Remove (dnp ...) from placed symbols; remove assembly/sim flags from sheets
+    if (node.name === 'symbol') {
+        const removed = removeAllChildren(node, 'dnp');
+        if (removed > 0) stats.r23_dnp_assembly += removed;
+    }
+    if (node.name === 'sheet') {
+        for (const attr of ['exclude_from_sim', 'in_bom', 'on_board', 'dnp']) {
+            const removed = removeAllChildren(node, attr);
+            if (removed > 0) stats.r23_dnp_assembly += removed;
+        }
+    }
+
+    // R24: Remove (hide ...) and (alternate ...) list children from lib_symbol pins.
+    // K6 pins do not accept these child lists.
+    if (node.name === 'pin') {
+        for (const attr of ['hide', 'alternate']) {
+            const removed = removeAllChildren(node, attr);
+            if (removed > 0) stats.r24_pin_attrs += removed;
+        }
+    }
+
+    // R25: Remove placed-symbol pin uuid blocks: (pin "N" (uuid ...)).
+    // These only appear on placed symbol instances (which have a lib_id child).
+    if (node.name === 'symbol' && findChild(node, 'lib_id')) {
+        const before = node.children.length;
+        node.children = node.children.filter(c => !isPlacedPinUuidBlock(c));
+        const removed = before - node.children.length;
+        if (removed > 0) stats.r25_pin_uuid_blocks += removed;
+    }
+
+    // R26/R27: property ids and sheet property normalization
+    if (node.name === 'symbol' || node.name === 'sheet') {
+        if (node.name === 'sheet') {
+            stats.r27_sheet_properties += normalizeKiCad6SheetProperties(node);
+        }
+        stats.r26_property_ids += ensureKiCad6PropertyIds(node);
+    }
+
+    // R30: downgrade K7 (fill (type color) (color ...)) → (fill (type background)).
+    // Only act when a (type color) child is present so plain sheet/shape fills that
+    // carry an explicit (color ...) without a type are left untouched.
+    if (node.name === 'fill') {
+        const typeNode = findChild(node, 'type');
+        if (typeNode && typeNode.children.length > 0 &&
+            String(typeNode.children[0].value).toLowerCase() === 'color') {
+            typeNode.children[0].value = 'background';
+            const removed = removeAllChildren(node, 'color');
+            stats.r30_fill_colors += 1 + removed;
+        }
+    }
+
+    // R21c: Remove color child from font nodes (KiCad 6 font does not support color)
+    if (node.name === 'font') {
+        const removed = removeAllChildren(node, 'color');
+        if (removed > 0) {
+            stats.r21_k7_features += removed;
+        }
+    }
+
+    for (const child of node.children) {
+        transformK7toK6(child, stats, log, warnings);
+    }
+}
+
+/**
+ * True for a placed-symbol pin block of the shape (pin "<atom>" (uuid ...)),
+ * i.e. a pin node with exactly two payload children: an atom/string and a uuid list.
+ */
+function isPlacedPinUuidBlock(node) {
+    if (!node || node.type !== 'list' || node.name !== 'pin') return false;
+    if (node.children.length !== 2) return false;
+    const first = node.children[0];
+    const second = node.children[1];
+    return (first.type === 'atom' || first.type === 'string') &&
+        second.type === 'list' && second.name === 'uuid';
+}
+
+/**
+ * R26: Ensure standard schematic properties carry their legacy (id N), inserting
+ * one (after the name/value, at index ≤3) for any standard property that lacks it.
+ * Non-standard custom properties get sequential ids starting at 5, avoiding
+ * collisions with ids already used by the symbol/sheet.
+ */
+function ensureKiCad6PropertyIds(node) {
+    let changed = 0;
+    const props = node.children.filter(c => c.type === 'list' && c.name === 'property');
+    const usedIds = new Set();
+    for (const prop of props) {
+        const idNode = findChild(prop, 'id');
+        if (idNode && idNode.children.length > 0) {
+            const n = parseInt(idNode.children[0].value);
+            if (!isNaN(n)) usedIds.add(n);
+        }
+        const name = prop.children[0] ? prop.children[0].value : '';
+        if (name in STD_PROPERTY_IDS) usedIds.add(STD_PROPERTY_IDS[name]);
+    }
+
+    const insertId = (prop, idValue) => {
+        const insertIdx = Math.min(3, prop.children.length);
+        prop.children.splice(insertIdx, 0, {
+            type: 'list', name: 'id', children: [{ type: 'atom', value: String(idValue) }],
+        });
+        changed++;
+    };
+
+    // Standard properties first.
+    for (const prop of props) {
+        if (findChild(prop, 'id')) continue;
+        const name = prop.children[0] ? prop.children[0].value : '';
+        if (name in STD_PROPERTY_IDS) insertId(prop, STD_PROPERTY_IDS[name]);
+    }
+    // Custom properties next.
+    let nextId = 5;
+    for (const prop of props) {
+        if (findChild(prop, 'id')) continue;
+        const name = prop.children[0] ? prop.children[0].value : '';
+        if (name in STD_PROPERTY_IDS) continue;
+        while (usedIds.has(nextId)) nextId++;
+        insertId(prop, nextId);
+        usedIds.add(nextId);
+        nextId++;
+    }
+    return changed;
+}
+
+/**
+ * R27: Normalize sheet property names/ids to KiCad 6 form.
+ * "Sheetname"/"Sheet name" → "Sheet name" (id 0); "Sheetfile"/"Sheet file" → "Sheet file" (id 1).
+ */
+function normalizeKiCad6SheetProperties(sheetNode) {
+    let changed = 0;
+    for (const prop of sheetNode.children) {
+        if (prop.type !== 'list' || prop.name !== 'property') continue;
+        if (prop.children.length < 1) continue;
+        const nameChild = prop.children[0];
+        let legacyName = null, legacyId = null;
+        if (nameChild.value === 'Sheetname' || nameChild.value === 'Sheet name') {
+            legacyName = 'Sheet name'; legacyId = 0;
+        } else if (nameChild.value === 'Sheetfile' || nameChild.value === 'Sheet file') {
+            legacyName = 'Sheet file'; legacyId = 1;
+        } else {
+            continue;
+        }
+        if (nameChild.value !== legacyName) { nameChild.value = legacyName; changed++; }
+        const idNode = findChild(prop, 'id');
+        if (idNode) {
+            if (idNode.children.length > 0 && idNode.children[0].value !== String(legacyId)) {
+                idNode.children[0].value = String(legacyId);
+                changed++;
+            }
+        } else {
+            const insertIdx = Math.min(3, prop.children.length);
+            prop.children.splice(insertIdx, 0, {
+                type: 'list', name: 'id', children: [{ type: 'atom', value: String(legacyId) }],
+            });
+            changed++;
+        }
+    }
+    return changed;
+}
+
+/**
+ * R28: Rebuild the KiCad 6 global (symbol_instances ...) + (sheet_instances ...)
+ * tables at the root from the per-object KiCad 7 (instances (project ...)) blocks.
+ * KiCad 7 subsheet files keep no root sheet_instances (only the top sheet does), so
+ * we synthesize one here. Returns 0 (no change) when there are no placed symbols and
+ * no child sheets to describe.
+ */
+function buildLegacySchematicInstances(root, log) {
+    if (!root || root.type !== 'list' || root.name !== 'kicad_sch') return 0;
+
+    const rootUuid = getChildValue(root, 'uuid') || '';
+
+    const sheetEntries = [];
+    const symbolPaths = [];
+
+    for (const child of root.children) {
+        if (child.type !== 'list') continue;
+        if (child.name === 'symbol' && findChild(child, 'lib_id')) {
+            const p = symbolInstancePathNode(child, rootUuid);
+            if (p) symbolPaths.push(p);
+        } else if (child.name === 'sheet') {
+            const sp = sheetInstancePathNode(child);
+            if (sp) sheetEntries.push(sp);
+        }
+    }
+
+    if (symbolPaths.length === 0 && sheetEntries.length === 0) return 0;
+
+    // sheet_instances always starts with the root page entry, then one per child sheet.
+    const sheetInstances = {
+        type: 'list', name: 'sheet_instances',
+        children: [mkPath('/', [mkField('page', '1', true)]), ...sheetEntries],
+    };
+
+    let changed = 1;
+    changed += removeAllChildren(root, 'sheet_instances');
+    changed += removeAllChildren(root, 'symbol_instances');
+    root.children.push(sheetInstances);
+    if (symbolPaths.length > 0) {
+        root.children.push({ type: 'list', name: 'symbol_instances', children: symbolPaths });
+    }
+    log.push(`R28: Rebuilt sheet_instances + symbol_instances (${symbolPaths.length} symbol(s))`);
+    return changed;
+}
+
+function mkField(name, value, quoted) {
+    return { type: 'list', name, children: [{ type: quoted ? 'string' : 'atom', value: String(value) }] };
+}
+
+function mkPath(pathStr, fieldNodes) {
+    return { type: 'list', name: 'path', children: [{ type: 'string', value: pathStr }, ...fieldNodes] };
+}
+
+/** First (instances)→(project)→(path) node of an object, or null. */
+function firstProjectInstancePath(objNode) {
+    const instances = findChild(objNode, 'instances');
+    if (!instances) return null;
+    for (const proj of findChildren(instances, 'project')) {
+        const path = findChild(proj, 'path');
+        if (path) return path;
+    }
+    // Some files nest the path directly under instances.
+    return findChild(instances, 'path');
+}
+
+/** Strip a leading "/<rootUuid>" prefix so the path is relative to the root sheet. */
+function normalizeLegacySheetPath(pathStr, rootUuid) {
+    let p = pathStr || '';
+    if (!p.startsWith('/')) p = '/' + p;
+    if (rootUuid && p.startsWith('/' + rootUuid)) {
+        p = p.slice(('/' + rootUuid).length) || '/';
+        if (!p.startsWith('/')) p = '/' + p;
+    }
+    return p;
+}
+
+function appendLegacyInstanceUuid(pathStr, uuid) {
+    if (!uuid) return pathStr;
+    if (pathStr.endsWith('/' + uuid)) return pathStr;
+    return (pathStr === '/' ? '/' : pathStr + '/') + uuid;
+}
+
+function symbolPropertyValue(symbolNode, propName) {
+    for (const prop of findChildren(symbolNode, 'property')) {
+        if (prop.children.length >= 2 && prop.children[0].value === propName) {
+            return prop.children[1].value || '';
+        }
+    }
+    return '';
+}
+
+function symbolInstancePathNode(symbolNode, rootUuid) {
+    const symbolUuid = getChildValue(symbolNode, 'uuid') || '';
+    const projPath = firstProjectInstancePath(symbolNode);
+
+    let basePath = projPath ? (projPath.children[0] ? projPath.children[0].value : '') : symbolUuid;
+    if (!basePath) return null;
+    basePath = normalizeLegacySheetPath(basePath, rootUuid);
+    const fullPath = appendLegacyInstanceUuid(basePath, symbolUuid);
+
+    const fromPath = (name) => {
+        if (!projPath) return null;
+        const n = findChild(projPath, name);
+        return n && n.children.length > 0 ? n.children[0].value : null;
+    };
+
+    const reference = fromPath('reference') ?? symbolPropertyValue(symbolNode, 'Reference');
+    const unit = fromPath('unit') ?? getChildValue(symbolNode, 'unit') ?? '1';
+    const value = fromPath('value') ?? symbolPropertyValue(symbolNode, 'Value');
+    const footprint = fromPath('footprint') ?? symbolPropertyValue(symbolNode, 'Footprint');
+
+    return mkPath(fullPath, [
+        mkField('reference', reference, true),
+        mkField('unit', unit, false),
+        mkField('value', value, true),
+        mkField('footprint', footprint, true),
+    ]);
+}
+
+function sheetInstancePathNode(sheetNode) {
+    const sheetUuid = getChildValue(sheetNode, 'uuid') || '';
+    if (!sheetUuid) return null;
+    const projPath = firstProjectInstancePath(sheetNode);
+    let page = '';
+    if (projPath) {
+        const pageNode = findChild(projPath, 'page');
+        if (pageNode && pageNode.children.length > 0) page = pageNode.children[0].value;
+    }
+    const fields = page ? [mkField('page', page, true)] : [];
+    return mkPath('/' + sheetUuid, fields);
+}
+
+/** Recursively remove all list descendants with the given head name. Returns count. */
+function removeDescendantsByName(node, name) {
+    if (!node || node.type !== 'list') return 0;
+    let removed = 0;
+    const before = node.children.length;
+    node.children = node.children.filter(c => !(c.type === 'list' && c.name === name));
+    removed += before - node.children.length;
+    for (const child of node.children) {
+        removed += removeDescendantsByName(child, name);
+    }
+    return removed;
 }

@@ -5,16 +5,16 @@
 - **KiCad 10 → KiCad 9**（原理图/符号库/PCB/封装）
 - **KiCad 9 → KiCad 8**
 - **KiCad 8 → KiCad 7**
-- **KiCad 10 → KiCad 7**（链式转换：10→9→8→7）
-- **KiCad 9 → KiCad 7**（链式转换：先 9→8，再 8→7）
+- **KiCad 7 → KiCad 6**
+- **链式转换**，例如 KiCad 10 → KiCad 6（10→9→8→7→6）、KiCad 9 → KiCad 7、KiCad 8 → KiCad 6 等
 
 ## 功能特性
 
 - **浏览器端转换**：纯前端实现，无需服务器，文件不会上传到任何地方
 - **四种文件类型**：支持 `.kicad_sch`（原理图）、`.kicad_sym`（符号库）、`.kicad_pcb`（PCB）和 `.kicad_mod`（封装）
 - **批量处理**：支持同时上传多个文件，一键转换并打包下载
-- **自动检测**：自动检测文件类型和版本（支持 KiCad 7/8/9/10），使用对应的转换规则
-- **链式降级**：KiCad 10 → KiCad 7 会自动执行三步转换（10→9→8→7）
+- **自动检测**：自动检测文件类型和版本（支持 KiCad 6/7/8/9/10），使用对应的转换规则
+- **链式降级**：例如 KiCad 10 → KiCad 6 会自动执行四步转换（10→9→8→7→6）
 - **转换日志**：显示详细的转换过程日志和警告信息
 
 ## 转换规则
@@ -60,6 +60,25 @@
 | R14 | `(fields_autoplaced yes)` → `(fields_autoplaced)`（移除值参数）；移除 `(dnp)` 节点 |
 | R15 | 嵌入图片非 PNG 格式（如 BMP）自动转换为 PNG（使用 Canvas API，KiCad 7 仅支持 PNG） |
 
+### 原理图 (.kicad_sch) — KiCad 7 → KiCad 6（R20-R30）
+
+| 规则 | 说明 |
+|------|------|
+| R20 | 文件头降级（`version` → `20211123`，移除 `generator_version`） |
+| R21 | 移除 KiCad 7 独有功能 `text_box`/`textbox`、`simulation_model`/`sim_model`、`netclass_flag`/`directive_label`，以及根层级的图形绘制图元 `(rectangle)`、`(circle)`、`(polyline)`、`(arc)`、`(bezier)`（有损） |
+| R21b | 移除所有 `(font ...)` 节点中的 `(color ...)`（KiCad 6 字体不支持自定义颜色） |
+| R22 | 递归移除 `exclude_from_sim`（KiCad 6 不支持仿真排除） |
+| R23 | 移除放置符号中的 `(dnp ...)`；移除原理图页（sheet）中的 `exclude_from_sim`/`in_bom`/`on_board`/`dnp` |
+| R24 | 移除 lib_symbol 引脚中的 `(hide ...)` 和 `(alternate ...)` 子列表 |
+| R25 | 移除放置符号的引脚 UUID 块 `(pin "N" (uuid ...))`（KiCad 7 独有，KiCad 6 实例中不使用） |
+| R26 | 为符号/原理图页属性添加遗留的 `(id N)`（KiCad 7 原理图属性省略了 id，而 KiCad 6 强制要求）。标准名称使用固定 id（Reference 为 0，Value 为 1 等）；自定义字段使用 id ≥ 5 |
+| R27 | 规范化原理图页属性名称和 id：`Sheetname` → `"Sheet name"` (id 0)，`Sheetfile` → `"Sheet file"` (id 1) |
+| R28 | 从每个 KiCad 7 对象的 `(instances (project ...))` 块中，在根层级重新构建 KiCad 6 全局的 `(symbol_instances ...)` 和 `(sheet_instances ...)` 表 |
+| R29 | 移除现已冗余的每个对象内部的 `(instances ...)` 块 |
+| R30 | 降级 `(fill (type color) (color ...))` → `(fill (type background))`（普通的 `(fill (color ...))` 保持不变） |
+
+> ⚠️ **KiCad 6 验证提示**：KiCad 6 实例表是根据 KiCad 7 层次路径启发式重建的。位号（Reference designators）仍会保留在每个符号的 `Reference` 属性中，但对于深层嵌套的层次化项目，建议在 KiCad 6 中重新打开以确认转换结果。
+
 ### 符号库 (.kicad_sym) — KiCad 10 → KiCad 9（NS1-NS8）
 
 | 规则 | 说明 |
@@ -90,6 +109,15 @@
 | S12 | `(property "Description" ...)` → `(property "ki_description" ...)`（属性名重命名） |
 | S13 | `effects`/`font` 中 `(hide yes)` → 裸 `hide`，`(bold yes)` → 裸 `bold`，`(italic yes)` → 裸 `italic` |
 | S14 | 移除 `(pin_numbers hide)` 节点；`pin_names` 中移除 `hide` 标记 |
+
+### 符号库 (.kicad_sym) — KiCad 7 → KiCad 6（S20-S23）
+
+| 规则 | 说明 |
+|------|------|
+| S20 | 文件头降级（`version` → `20211014`，移除 `generator_version`） |
+| S21 | 移除符号文本框 (`text_box`/`textbox`) — KiCad 7 特性（有损） |
+| S22 | 移除引脚上的 `(hide ...)` 和 `(alternate ...)` 子列表 |
+| S23 | 降级 `(fill (type color) (color ...))` → `(fill (type background))` |
 
 ### PCB (.kicad_pcb) — KiCad 10 → KiCad 9（NP1-NP11）
 
@@ -150,6 +178,24 @@
 | P27 | 移除 footprint `(attr ...)` 中的 K8 专有标志（`dnp`、`allow_missing_courtyard`） |
 | P28 | 移除顶层 `(generated ...)` 元素（调谐图案等 KiCad 8 特有功能，K7 不支持） |
 
+### PCB (.kicad_pcb) — KiCad 7 → KiCad 6（P40-P49）
+
+| 规则 | 说明 |
+|------|------|
+| P40 | 文件头降级（`version` → `20211014`，移除 `generator_version`，`generator` 去引号） |
+| P41 | 移除 KiCad 7 独有特性：`gr_text_box`/`fp_text_box`/`text_box`、`image`、`net_tie`/`net_ties`/`net_tie_pad_groups`（有损） |
+| P41b | 将封装（footprint）层级的 `(dimension ...)` 节点移动到根 PCB 层级（KiCad 6 不支持封装内部包含尺寸标注） |
+| P42 | 在所有 `gr_*`/`fp_*` 图形形状中，将 `(stroke (width W) (type T))` → `(width W)`（KiCad 6 使用扁平宽度属性） |
+| P43 | `pcbplotparams` 中的布尔值 `yes`/`no` → `true`/`false` |
+| P44 | 图形形状中的 `(fill no)` → `(fill none)` |
+| P45 | 移除 `gr_text`/`fp_text` 中的 `(render_cache ...)` |
+| P46 | 过孔（Via）层连接属性：`(remove_unused_layers yes)`/`(keep_end_layers yes)` → 裸标志（为 `no` 时移除）；移除 `(zone_layer_connections ...)` 和 `(free ...)` |
+| P47 | 移除焊盘/区域中的 `(thermal_bridge_angle ...)`；移除区域中的 `(attr ...)` |
+| P48 | 尺寸标注降级：`(type radial)` → `(type leader)` 并移除径向独有的 `(leader_length ...)` — **径向尺寸（radial dimension）是 KiCad 7 特性，KiCad 6 仅支持 `aligned`/`orthogonal`/`leader`/`center`，如果不降级会使整块板子加载失败（打开时崩溃）。** 此外，移除尺寸标注样式中的 `(arrow_direction ...)` |
+| P49 | 移除 3D `model` 节点中的 `(hide ...)` |
+
+> ⚠️ **径向尺寸提示（有损）**：KiCad 6 没有径向尺寸类型。P48 将 `(type radial)` 重写为最接近的模拟类型：`leader`（引线 + 文本），保留文本/格式（包含 `override_value`）并丢弃径向独有的 `leader_length`。标注虽能保留，但其语义由真实的径向/直径测量退化为普通的引线标注。每个被转换的径向尺寸都会触发一条警告。（这些径向尺寸在 KiCad 7 中常位于封装内部；P41b 会先将其提升至板子根层级，再由 P48 完成降级。）
+
 ### 封装 (.kicad_mod) — KiCad 10 → KiCad 9（NF1-NF2）
 
 | 规则 | 说明 |
@@ -170,7 +216,7 @@
 
 | 规则 | 说明 |
 |------|------|
-| F10 | 文件头降级（`version` → `20211014`，移除 `generator_version`，`generator` 去引号） |
+| F10 | 文件头降级（`version` → `20221018`，移除 `generator_version`，`generator` 去引号） |
 | F11 | `(uuid "xxx")` → `(tstamp xxx)`（全局递归） |
 | F12 | `(property "Reference" ...)` → `(fp_text reference ...)`；`(property "Value" ...)` → `(fp_text value ...)` |
 | F13 | 移除 `(property "Footprint")`、`(property "Datasheet")`、`(property "Description")` 及自定义属性 |
@@ -179,6 +225,20 @@
 | F16 | pad 属性兼容：`(remove_unused_layers yes)` → 裸标志 / `no` 时移除；移除 `(pintype)`、`(pinfunction)`、`(teardrops)` |
 | F17 | `(hide yes)` → 裸 `hide`，`(bold yes)` → 裸 `bold`，`(italic yes)` → 裸 `italic`；移除 `(unlocked yes)` |
 | F18 | pad 通配符层名去引号：`"*.Cu"` → `*.Cu`（KiCad 7 使用无引号原子） |
+
+### 封装 (.kicad_mod) — KiCad 7 → KiCad 6（F20-F26）
+
+| 规则 | 说明 |
+|------|------|
+| F20 | 文件头降级（`version` → `20211014`，移除 `generator_version`，`generator` 去引号） |
+| F21 | 在 `fp_line`/`fp_rect`/`fp_circle`/`fp_arc`/`fp_poly`/`fp_curve` 中，将 `(stroke (width W) (type T))` → `(width W)` |
+| F22 | 图形中的 `(fill no)` → `(fill none)` |
+| F23 | 移除 `fp_text` 中的 `(render_cache ...)` |
+| F24 | 移除 KiCad 7 独有的对象（`fp_text_box`、`image`、`net_tie_pad_groups`）— 有损 |
+| F25 | 焊盘层连接属性：`(remove_unused_layers yes)`/`(keep_end_layers yes)` → 裸标志（为 `no` 时移除）；移除 `(zone_layer_connections ...)` 和 `(thermal_bridge_angle ...)` |
+| F26 | 移除 3D `model` 节点中的 `(hide ...)` |
+
+> **封装版本提示**：KiCad 7 的封装格式特征版本是 `20221018`，而 KiCad 6 是 `20211014`。（K8→K7 的封装规则 F10 现已更新为写入 `20221018`。）
 
 ## 快速开始
 
@@ -197,7 +257,7 @@ npm run build
 
 - **React** + **Vite** — 前端框架与构建工具
 - **S-expression Parser** — 自定义的 KiCad S-表达式解析器（`src/lib/sexpr-parser.js`）
-- **Converter** — 基于 AST 的版本转换引擎（`src/lib/converter.js` + `src/lib/sym-converter.js` + `src/lib/pcb-converter.js` + `src/lib/fp-converter.js`），支持 KiCad 10/9/8/7 链式降级
+- **Converter** — 基于 AST 的版本转换引擎（`src/lib/converter.js` + `src/lib/sym-converter.js` + `src/lib/pcb-converter.js` + `src/lib/fp-converter.js`），支持 KiCad 10/9/8/7/6 链式降级
 
 ## 项目结构
 

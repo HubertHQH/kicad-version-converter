@@ -5,7 +5,8 @@
  *   KiCad 10 → KiCad 9
  *   KiCad 9 → KiCad 8
  *   KiCad 8 → KiCad 7
- *   KiCad 10 → KiCad 7 (chained: 10→9→8→7)
+ *   KiCad 7 → KiCad 6
+ *   Chained downgrades, e.g. KiCad 10 → KiCad 6 (10→9→8→7→6)
  * 
  * Conversion rules (K10 → K9):
  *   NS1: Header version/generator downgrade
@@ -28,6 +29,12 @@
  *   S12: Rename (property "Description" ...) → (property "ki_description" ...)
  *   S13: Convert (hide/bold/italic yes) to bare atoms in effects/font
  *   S14: Handle pin_numbers/pin_names hide differences for K7
+ *
+ * Conversion rules (K7 → K6):
+ *   S20: Header downgrade (version → 20211014, remove generator_version)
+ *   S21: Remove symbol text boxes (text_box/textbox) — K7 feature (lossy)
+ *   S22: Remove (hide ...) and (alternate ...) child lists from pins
+ *   S23: Downgrade (fill (type color) (color ...)) → (fill (type background))
  */
 
 import {
@@ -42,6 +49,7 @@ import {
 // --- Version Definitions (Symbol Library specific) ---
 
 export const SYM_VERSIONS = {
+    KICAD6: { version: '20211014', generatorVersion: null, label: 'KiCad 6' },
     KICAD7: { version: '20220914', generatorVersion: null, label: 'KiCad 7' },
     KICAD8: { version: '20231120', generatorVersion: '8.0', label: 'KiCad 8' },
     KICAD9: { version: '20241209', generatorVersion: '9.0', label: 'KiCad 9' },
@@ -355,5 +363,81 @@ function transformSymK8toK7(node, stats, log, warnings) {
 
     for (const child of node.children) {
         transformSymK8toK7(child, stats, log, warnings);
+    }
+}
+
+// ============================================================
+//  KiCad 7 → KiCad 6 Conversion (Symbol Library, S20-series rules)
+// ============================================================
+//
+// The main .kicad_sym change KiCad 7 introduced over KiCad 6 is symbol text
+// boxes. The remaining rules normalize pin/fill syntax defensively.
+
+export async function applySymK7toK6(ast, log, warnings) {
+    const stats = {
+        s20_header: false,
+        s21_text_boxes: 0,
+        s22_pin_attrs: 0,
+        s23_fill_colors: 0,
+    };
+
+    // S20: Header downgrade (K7 symbol libs have no generator_version)
+    setChildValue(ast, 'version', SYM_VERSIONS.KICAD6.version);
+    removeChild(ast, 'generator_version');
+    stats.s20_header = true;
+    log.push(`S20: Version → ${SYM_VERSIONS.KICAD6.version}, removed generator_version`);
+
+    transformSymK7toK6(ast, stats, log, warnings);
+
+    if (stats.s21_text_boxes > 0) {
+        warnings.push(`Removed ${stats.s21_text_boxes} symbol text box(es) - KiCad 7 feature not available in KiCad 6`);
+    }
+
+    // Summary
+    log.push('--- K7→K6 Symbol Library Summary ---');
+    log.push(`S20 Header downgraded: ${stats.s20_header ? 'Yes' : 'No'}`);
+    log.push(`S21 text boxes removed: ${stats.s21_text_boxes}`);
+    log.push(`S22 pin hide/alternate removed: ${stats.s22_pin_attrs}`);
+    log.push(`S23 fill colors downgraded: ${stats.s23_fill_colors}`);
+}
+
+function transformSymK7toK6(node, stats, log, warnings) {
+    if (!node || node.type !== 'list') return;
+
+    // S21: Remove symbol text boxes (text_box / textbox)
+    for (const name of ['text_box', 'textbox']) {
+        const removed = removeAllChildren(node, name);
+        if (removed > 0) stats.s21_text_boxes += removed;
+    }
+
+    // S22: Remove (hide ...) / (alternate ...) list children from pins
+    if (node.name === 'pin') {
+        for (const attr of ['hide', 'alternate']) {
+            const removed = removeAllChildren(node, attr);
+            if (removed > 0) stats.s22_pin_attrs += removed;
+        }
+    }
+
+    // S23: Downgrade (fill (type color) (color ...)) → (fill (type background))
+    if (node.name === 'fill') {
+        const typeNode = findChild(node, 'type');
+        if (typeNode && typeNode.children.length > 0 &&
+            String(typeNode.children[0].value).toLowerCase() === 'color') {
+            typeNode.children[0].value = 'background';
+            const removed = removeAllChildren(node, 'color');
+            stats.s23_fill_colors += 1 + removed;
+        }
+    }
+
+    // S21b: Remove color child from font nodes (KiCad 6 font does not support color)
+    if (node.name === 'font') {
+        const removed = removeAllChildren(node, 'color');
+        if (removed > 0) {
+            stats.s21_text_boxes += removed;
+        }
+    }
+
+    for (const child of node.children) {
+        transformSymK7toK6(child, stats, log, warnings);
     }
 }
