@@ -9,24 +9,37 @@
  *   KiCad 9 → KiCad 8
  *   KiCad 8 → KiCad 7
  *   KiCad 7 → KiCad 6
- *   Chained downgrades, e.g. KiCad 10 → KiCad 6 (10→9→8→7→6)
- * 
+ *   KiCad 6 → KiCad 5
+ *   Chained downgrades, e.g. KiCad 10 → KiCad 5 (10→9→8→7→6→5)
+ *
+ * KiCad 5/6 is a *file-family boundary*. PCB (.kicad_pcb) and footprint (.kicad_mod)
+ * stay S-expression, but schematic and symbol-library cross into legacy text formats:
+ *   .kicad_sch → .sch (legacy Eeschema V4) + a <name>-cache.lib   [sch-legacy-writer.js]
+ *   .kicad_sym → .lib (legacy 2.4) + .dcm (2.0)                   [sym-legacy-writer.js]
+ * For these two, convertKicad() runs the S-expr chain down to KiCad 6 and then hands the
+ * AST to the legacy writer. A single input may therefore yield several output files
+ * (returned as result.outputFiles).
+ *
  * Schematic conversion rules (K10 → K9): N1-N10
  * Schematic conversion rules (K9 → K8): R1-R8
  * Schematic conversion rules (K8 → K7): R10-R15
  * Schematic conversion rules (K7 → K6): R20-R30
+ * Schematic conversion (K6 → K5): legacy .sch writer (+ cache .lib) — sch-legacy-writer.js
  * Symbol library conversion rules (K10 → K9): NS1-NS8
  * Symbol library conversion rules (K9 → K8): S1-S4
  * Symbol library conversion rules (K8 → K7): S10-S14
  * Symbol library conversion rules (K7 → K6): S20-S23
+ * Symbol library conversion (K6 → K5): legacy .lib/.dcm writer — sym-legacy-writer.js
  * PCB conversion rules (K10 → K9): NP1-NP11
  * PCB conversion rules (K9 → K8): P1-P9, P21-P23, P27
  * PCB conversion rules (K8 → K7): P10-P28
  * PCB conversion rules (K7 → K6): P40-P49
+ * PCB conversion rules (K6 → K5): P50-P63
  * Footprint conversion rules (K10 → K9): NF1-NF3
  * Footprint conversion rules (K9 → K8): F1-F4
  * Footprint conversion rules (K8 → K7): F10-F18
  * Footprint conversion rules (K7 → K6): F20-F26
+ * Footprint conversion rules (K6 → K5): F30-F38
  */
 
 import {
@@ -54,6 +67,7 @@ import {
     applyPcbK9toK8,
     applyPcbK8toK7,
     applyPcbK7toK6,
+    applyPcbK6toK5,
     PCB_VERSIONS,
 } from './pcb-converter.js';
 
@@ -62,8 +76,44 @@ import {
     applyFpK9toK8,
     applyFpK8toK7,
     applyFpK7toK6,
+    applyFpK6toK5,
     FP_VERSIONS,
 } from './fp-converter.js';
+
+import { writeLegacySymbolLib } from './sym-legacy-writer.js';
+import { writeLegacySchematic } from './sch-legacy-writer.js';
+export { mergeCacheLibs } from './sym-legacy-writer.js';
+
+/** Strip a known modern KiCad extension to get a base filename. */
+function stripKicadExt(name) {
+    return String(name || '').replace(/\.(kicad_sch|kicad_sym|kicad_pcb|kicad_mod)$/i, '');
+}
+
+/** Strip any directory prefix from a path/filename. */
+function baseFileName(p) {
+    return String(p || '').replace(/^.*[\\/]/, '');
+}
+
+/**
+ * For a batch of schematic files, find the single hierarchical root sheet — the one
+ * not referenced as a sub-sheet (`(property "Sheet file" "...")`) by any other.
+ * Returns the root's base name (no extension) so KiCad 5's single project cache can
+ * be named `<root>-cache.lib`, or null when there isn't exactly one root (keep
+ * per-file caches). Used by the UI to consolidate hierarchical schematic caches.
+ * @param {{name: string, content: string}[]} files
+ */
+export function detectSchematicRoot(files) {
+    const schs = (files || []).filter(f => /\.kicad_sch$/i.test(f.name));
+    if (schs.length <= 1) return null;
+    const referenced = new Set();
+    for (const f of schs) {
+        const re = /\(property\s+"Sheet ?file"\s+"([^"]+)"/gi;
+        let m;
+        while ((m = re.exec(f.content))) referenced.add(baseFileName(m[1]));
+    }
+    const roots = schs.filter(f => !referenced.has(baseFileName(f.name)));
+    return roots.length === 1 ? stripKicadExt(baseFileName(roots[0].name)) : null;
+}
 
 // --- Version Definitions ---
 
@@ -161,7 +211,7 @@ export function detectVersion(input) {
  * @param {string} targetVersionKey - 'KICAD8' or 'KICAD7'
  * @returns {Promise<{ output: string, log: string[], warnings: string[], fileType: string }>}
  */
-export async function convertKicad(input, targetVersionKey) {
+export async function convertKicad(input, targetVersionKey, fileName = '', opts = {}) {
     const log = [];
     const warnings = [];
 
@@ -183,9 +233,16 @@ export async function convertKicad(input, targetVersionKey) {
     const fileTypeLabel = isFootprint ? 'Footprint' : (isPcb ? 'PCB' : (isSymbolLib ? 'Symbol Library' : 'Schematic'));
     log.push(`File type: ${fileTypeLabel}`);
 
+    // KiCad 5 schematic/symbol are *legacy text* families (.sch, .lib/.dcm), not
+    // S-expressions. We normalise the AST down to KiCad 6 with the regular chain,
+    // then hand it to a dedicated legacy writer below. PCB/footprint K5 stay
+    // S-expression and convert through the normal chain (KICAD5 in their tables).
+    const legacyK5 = targetVersionKey === 'KICAD5' && (isSchematic || isSymbolLib);
+    const effectiveTargetKey = legacyK5 ? 'KICAD6' : targetVersionKey;
+
     // Use appropriate version table
     const versionTable = isFootprint ? FP_VERSIONS : (isPcb ? PCB_VERSIONS : (isSymbolLib ? SYM_VERSIONS : VERSIONS));
-    const targetVersion = versionTable[targetVersionKey];
+    const targetVersion = versionTable[effectiveTargetKey];
     if (!targetVersion) {
         throw new Error(`Unknown target version: ${targetVersionKey}`);
     }
@@ -201,8 +258,9 @@ export async function convertKicad(input, targetVersionKey) {
     const k8VersionNum = parseInt(versionTable.KICAD8.version);
     const k7VersionNum = parseInt(versionTable.KICAD7.version);
     const k6VersionNum = versionTable.KICAD6 ? parseInt(versionTable.KICAD6.version) : -1;
+    const k5VersionNum = versionTable.KICAD5 ? parseInt(versionTable.KICAD5.version) : -1;
 
-    if (inputVersionNum <= targetVersionNum) {
+    if (!legacyK5 && inputVersionNum <= targetVersionNum) {
         warnings.push(`File version ${inputVersion} is already ${targetVersion.label} or earlier. No conversion needed.`);
     }
 
@@ -261,6 +319,16 @@ export async function convertKicad(input, targetVersionKey) {
         }
     }
 
+    // K6 → K5 step (same S-expression family for PCB/footprint only; schematic and
+    // symbol K5 are legacy text formats handled separately in convertKicad).
+    if (k5VersionNum >= 0 && inputVersionNum > k5VersionNum && targetVersionNum <= k5VersionNum) {
+        if (isFootprint) {
+            steps.push({ from: versionTable.KICAD6, to: versionTable.KICAD5, fn: applyFpK6toK5 });
+        } else if (isPcb) {
+            steps.push({ from: versionTable.KICAD6, to: versionTable.KICAD5, fn: applyPcbK6toK5 });
+        }
+    }
+
     if (steps.length === 0 && inputVersionNum > targetVersionNum) {
         // Direct header downgrade as fallback
         setChildValue(ast, 'version', targetVersion.version);
@@ -274,6 +342,38 @@ export async function convertKicad(input, targetVersionKey) {
     for (const step of steps) {
         log.push(`\n─── ${step.from.label} → ${step.to.label} (${fileTypeLabel}) ───`);
         await step.fn(ast, log, warnings);
+    }
+
+    // Cross-family legacy emission (KiCad 6 AST → KiCad 5 legacy text files)
+    if (legacyK5) {
+        const baseName = stripKicadExt(fileName) || (isSymbolLib ? 'symbols' : 'schematic');
+        // For a hierarchical project the caller passes the root sheet's base name so
+        // every sheet points at (and contributes to) one `<root>-cache.lib`.
+        const cacheBase = opts.cacheBaseName || baseName;
+        log.push(`\n─── KiCad 6 → KiCad 5 (${fileTypeLabel}, legacy format) ───`);
+
+        if (isSchematic) {
+            const { sch, cacheLib, cacheDcm } = writeLegacySchematic(ast, baseName, warnings, cacheBase);
+            const outputFiles = [{ name: `${baseName}.sch`, content: sch }];
+            if (cacheLib) outputFiles.push({ name: `${cacheBase}-cache.lib`, content: cacheLib });
+            if (cacheDcm && /\$CMP/.test(cacheDcm)) outputFiles.push({ name: `${cacheBase}-cache.dcm`, content: cacheDcm });
+
+            const subSheets = [];
+            collectSubSheetFiles(ast, subSheets);
+            if (subSheets.length > 0) {
+                const asSch = subSheets.map(s => s.replace(/\.kicad_sch$/i, '.sch'));
+                warnings.push(`This schematic references ${subSheets.length} sub-sheet(s) that must also be converted to .sch: ${asSch.join(', ')}`);
+            }
+            log.push(`Emitted ${outputFiles.length} legacy file(s): ${outputFiles.map(f => f.name).join(', ')}`);
+            return { output: sch, outputFiles, log, warnings, fileType: fileTypeLabel };
+        }
+
+        // Symbol library → .lib (+ .dcm when it carries documentation records)
+        const { lib, dcm } = writeLegacySymbolLib(ast, warnings);
+        const outputFiles = [{ name: `${baseName}.lib`, content: lib }];
+        if (/\$CMP/.test(dcm)) outputFiles.push({ name: `${baseName}.dcm`, content: dcm });
+        log.push(`Emitted ${outputFiles.length} legacy file(s): ${outputFiles.map(f => f.name).join(', ')}`);
+        return { output: lib, outputFiles, log, warnings, fileType: fileTypeLabel };
     }
 
     // Serialize
@@ -291,7 +391,8 @@ export async function convertKicad(input, targetVersionKey) {
         }
     }
 
-    return { output, log, warnings, fileType: fileTypeLabel };
+    const outputFiles = [{ name: fileName || `output.${fileType}`, content: output }];
+    return { output, outputFiles, log, warnings, fileType: fileTypeLabel };
 }
 
 /**

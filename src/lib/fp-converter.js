@@ -6,7 +6,8 @@
  *   KiCad 9 → KiCad 8
  *   KiCad 8 → KiCad 7
  *   KiCad 7 → KiCad 6
- *   Chained downgrades, e.g. KiCad 10 → KiCad 6 (10→9→8→7→6)
+ *   KiCad 6 → KiCad 5  ((footprint ...) → legacy (module ...))
+ *   Chained downgrades, e.g. KiCad 10 → KiCad 5 (10→9→8→7→6→5)
  * 
  * Conversion rules (K10 → K9): NF1-NF3
  *   NF1: Header downgrade (version, generator_version)
@@ -38,6 +39,17 @@
  *   F24: Remove K7-only objects (fp_text_box, image, net_tie_pad_groups) — lossy
  *   F25: Pad layer-connection attrs: bare flag / removal; remove zone_layer_connections/thermal_bridge_angle
  *   F26: Remove (hide ...) from 3D model nodes
+ *
+ * Conversion rules (K6 → K5): F30-F38  ((footprint ...) → legacy (module ...))
+ *   F30: (footprint ...) → (module ...); drop version/generator; ensure (tedit ...)
+ *   F31: (attr ...) → bare smd/virtual (through-hole + sub-flags dropped)
+ *   F32: fp_arc 3-point (start/mid/end) → (start=center)(end)(angle)
+ *   F33: roundrect/custom pads → rect; strip K6-only pad attributes
+ *   F34: fp_rect → four fp_line segments
+ *   F35: Remove all (tstamp ...)/(uuid ...)
+ *   F36: Drop K6-only children (property/group/net_tie_pad_groups); truncate (path ...) to 8-hex
+ *   F37: Strip (fill ...) from graphic shapes (K5 parseEDGE_MODULE rejects any graphic fill)
+ *   F38: 3D model (offset (xyz ...)) → (at (xyz ...))
  */
 
 import {
@@ -49,9 +61,16 @@ import {
     getChildValue,
 } from './sexpr-parser.js';
 
+import {
+    downgradeArcMidToAngle,
+    downgradePadToLegacy,
+    rectToLines,
+} from './pcb-converter.js';
+
 // --- Version Definitions (Footprint specific) ---
 
 const FP_VERSIONS = {
+    KICAD5: { version: '20171130', generatorVersion: null, label: 'KiCad 5' },
     KICAD6: { version: '20211014', generatorVersion: null, label: 'KiCad 6' },
     KICAD7: { version: '20221018', generatorVersion: null, label: 'KiCad 7' },
     KICAD8: { version: '20240108', generatorVersion: '8.0', label: 'KiCad 8' },
@@ -597,4 +616,158 @@ function transformFpK7toK6(node, stats, log, warnings) {
     for (const child of node.children) {
         transformFpK7toK6(child, stats, log, warnings);
     }
+}
+
+// ============================================================
+//  KiCad 6 → KiCad 5 Conversion (Footprint, F30-series rules)
+// ============================================================
+//
+// A standalone KiCad 6 .kicad_mod is a (footprint ...) node carrying (version
+// 20211014) + (generator ...) headers. KiCad 5 uses the legacy (module ...) node
+// with a (tedit ...) timestamp and no version/generator. Graphics and pads
+// downgrade exactly like board footprints (arcs 3-point→center+angle,
+// roundrect/custom pads → rect, fp_rect → fp_lines, tstamp/uuid removed). Shared
+// geometry/pad helpers are imported from pcb-converter.js.
+
+export async function applyFpK6toK5(ast, log, warnings) {
+    const stats = {
+        f30_header: false,
+        f31_attr: 0,
+        f32_arcs: 0,
+        f33_pads: 0,
+        f34_rects: 0,
+        f35_tstamps: 0,
+        f36_dropped: 0,
+        f37_graphic_fill: 0,
+        f38_model_offset: 0,
+    };
+
+    // F30: (footprint ...) → (module ...); drop version/generator; ensure (tedit ...)
+    ast.name = 'module';
+    // Unquote the name only when bare-safe; names with spaces/parens stay quoted
+    // (K5 mis-parses an unquoted lib:FOO(DC-10A) — the "(DC-10A)" becomes a token).
+    const fpName = ast.children[0];
+    if (fpName && (fpName.type === 'string' || fpName.type === 'atom')) {
+        fpName.type = /^[^\s()"]+$/.test(String(fpName.value)) ? 'atom' : 'string';
+    }
+    removeChild(ast, 'version');
+    removeChild(ast, 'generator');
+    removeChild(ast, 'generator_version');
+    if (!findChild(ast, 'tedit')) {
+        const layerIdx = ast.children.findIndex(c => c.type === 'list' && c.name === 'layer');
+        const tedit = { type: 'list', name: 'tedit', children: [{ type: 'atom', value: '0' }] };
+        ast.children.splice(layerIdx >= 0 ? layerIdx + 1 : 1, 0, tedit);
+    }
+    stats.f30_header = true;
+    log.push(`F30: (footprint) → (module), version → ${FP_VERSIONS.KICAD5.version}, removed version/generator`);
+
+    // F31: attr mapping — KiCad 5 only knows bare (attr smd)/(attr virtual);
+    // through_hole is the default (no attr) and K6 sub-flags are dropped.
+    const attrNode = findChild(ast, 'attr');
+    if (attrNode) {
+        const flags = attrNode.children.filter(c => c.type === 'atom').map(c => c.value);
+        removeChild(ast, 'attr');
+        const k5attr = flags.includes('smd') ? 'smd'
+            : (flags.includes('virtual') || flags.includes('board_only')) ? 'virtual' : null;
+        if (k5attr) {
+            ast.children.push({ type: 'list', name: 'attr', children: [{ type: 'atom', value: k5attr }] });
+        }
+        stats.f31_attr++;
+    }
+
+    // F36: drop K6-only footprint children K5 cannot parse; truncate (path ...)
+    for (const name of ['property', 'group', 'net_tie_pad_groups']) {
+        const r = removeAllChildren(ast, name);
+        if (r > 0) stats.f36_dropped += r;
+    }
+    const pathNode = findChild(ast, 'path');
+    if (pathNode && pathNode.children.length > 0 && pathNode.children[0].value) {
+        pathNode.children[0].value = '/' + String(pathNode.children[0].value)
+            .split('/').filter(Boolean).map(s => s.replace(/-/g, '').slice(-8)).join('/');
+        pathNode.children[0].type = 'atom';
+    }
+
+    // F32-F34: recursive graphics/pad downgrade
+    transformFpK6toK5(ast, stats, log, warnings);
+
+    // F35: remove all tstamp/uuid identifiers (K5 regenerates them on load)
+    stats.f35_tstamps += removeDescendantsByNameFp(ast, 'tstamp');
+    stats.f35_tstamps += removeDescendantsByNameFp(ast, 'uuid');
+
+    // Summary
+    log.push('--- K6→K5 Footprint Summary ---');
+    log.push(`F30 Header (footprint→module): ${stats.f30_header ? 'Yes' : 'No'}`);
+    log.push(`F31 attr mapped: ${stats.f31_attr}`);
+    log.push(`F32 arcs converted to center+angle: ${stats.f32_arcs}`);
+    log.push(`F33 roundrect/custom pads → rect: ${stats.f33_pads}`);
+    log.push(`F34 rectangles → line segments: ${stats.f34_rects}`);
+    log.push(`F35 tstamp/uuid removed: ${stats.f35_tstamps}`);
+    log.push(`F36 K6-only children dropped: ${stats.f36_dropped}`);
+    log.push(`F37 graphic (fill) removed: ${stats.f37_graphic_fill}`);
+    log.push(`F38 model offset → at: ${stats.f38_model_offset}`);
+}
+
+function transformFpK6toK5(node, stats, log, warnings) {
+    if (!node || node.type !== 'list') return;
+
+    // Unquote simple layer name tokens (KiCad 5 writes them bare)
+    if (node.name === 'layer' || node.name === 'layers') {
+        for (const c of node.children) {
+            if (c.type === 'string' && /^[^\s()"]+$/.test(c.value)) c.type = 'atom';
+        }
+    }
+
+    // F32: fp_arc 3-point → center+angle
+    if (node.name === 'fp_arc') {
+        if (downgradeArcMidToAngle(node)) stats.f32_arcs++;
+    }
+    // F33: pad shape/attribute downgrade
+    if (node.name === 'pad') {
+        if (downgradePadToLegacy(node)) stats.f33_pads++;
+    }
+    // F37: Strip (fill ...) from graphic shapes. KiCad 5's parseEDGE_MODULE throws
+    // "Expecting 'layer or width'" on a (fill ...) child — it accepts NO fill value
+    // (none/solid/yes/no) on fp_line/fp_rect/fp_circle/fp_arc/fp_poly/fp_curve.
+    if (['fp_line', 'fp_rect', 'fp_circle', 'fp_arc', 'fp_poly', 'fp_curve'].includes(node.name)) {
+        stats.f37_graphic_fill += removeAllChildren(node, 'fill');
+    }
+    // F38: 3D model (offset (xyz ...)) → (at (xyz ...)) — K5 model node uses 'at'.
+    if (node.name === 'model') {
+        const offsetNode = findChild(node, 'offset');
+        if (offsetNode && !findChild(node, 'at')) {
+            offsetNode.name = 'at';
+            stats.f38_model_offset++;
+        }
+    }
+    // font color/face removal (defensive; K6 footprint fonts don't carry these)
+    if (node.name === 'font') {
+        removeAllChildren(node, 'color');
+        removeAllChildren(node, 'face');
+    }
+
+    // F34: child-level fp_rect → four fp_line segments
+    const newChildren = [];
+    for (const child of node.children) {
+        if (child.type === 'list' && child.name === 'fp_rect') {
+            const lines = rectToLines(child);
+            if (lines) { newChildren.push(...lines); stats.f34_rects++; continue; }
+        }
+        newChildren.push(child);
+    }
+    node.children = newChildren;
+
+    for (const child of node.children) {
+        transformFpK6toK5(child, stats, log, warnings);
+    }
+}
+
+/** Recursively remove all list descendants with the given head name. Returns count. */
+function removeDescendantsByNameFp(node, name) {
+    if (!node || node.type !== 'list') return 0;
+    let removed = 0;
+    const before = node.children.length;
+    node.children = node.children.filter(c => !(c.type === 'list' && c.name === name));
+    removed += before - node.children.length;
+    for (const child of node.children) removed += removeDescendantsByNameFp(child, name);
+    return removed;
 }
