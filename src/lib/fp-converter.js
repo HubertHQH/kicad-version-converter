@@ -5,7 +5,8 @@
  *   KiCad 10 → KiCad 9
  *   KiCad 9 → KiCad 8
  *   KiCad 8 → KiCad 7
- *   KiCad 10 → KiCad 7 (chained: 10→9→8→7)
+ *   KiCad 7 → KiCad 6
+ *   Chained downgrades, e.g. KiCad 10 → KiCad 6 (10→9→8→7→6)
  * 
  * Conversion rules (K10 → K9): NF1-NF3
  *   NF1: Header downgrade (version, generator_version)
@@ -28,6 +29,15 @@
  *   F16: Pad compatibility — remove_unused_layers, pintype, pinfunction, teardrops
  *   F17: (hide/bold/italic yes) → bare atoms; remove (unlocked yes)
  *   F18: Unquote wildcard layers in pad (layers ...) nodes
+ *
+ * Conversion rules (K7 → K6): F20-F26
+ *   F20: Header downgrade (version → 20211014, remove generator_version, unquote generator)
+ *   F21: (stroke (width W) (type T)) → (width W) in fp_line/fp_rect/fp_circle/fp_arc/fp_poly/fp_curve
+ *   F22: (fill no) → (fill none) in shapes
+ *   F23: Remove (render_cache ...) from fp_text
+ *   F24: Remove K7-only objects (fp_text_box, image, net_tie_pad_groups) — lossy
+ *   F25: Pad layer-connection attrs: bare flag / removal; remove zone_layer_connections/thermal_bridge_angle
+ *   F26: Remove (hide ...) from 3D model nodes
  */
 
 import {
@@ -42,7 +52,8 @@ import {
 // --- Version Definitions (Footprint specific) ---
 
 const FP_VERSIONS = {
-    KICAD7: { version: '20211014', generatorVersion: null, label: 'KiCad 7' },
+    KICAD6: { version: '20211014', generatorVersion: null, label: 'KiCad 6' },
+    KICAD7: { version: '20221018', generatorVersion: null, label: 'KiCad 7' },
     KICAD8: { version: '20240108', generatorVersion: '8.0', label: 'KiCad 8' },
     KICAD9: { version: '20241229', generatorVersion: '9.0', label: 'KiCad 9' },
     KICAD10: { version: '20260206', generatorVersion: '10.0', label: 'KiCad 10' },
@@ -430,5 +441,160 @@ function applyFpPadCompat(padNode, stats) {
                 stats.f16_pad_compat++;
             }
         }
+    }
+}
+
+// ============================================================
+//  KiCad 7 → KiCad 6 Conversion (Footprint, F20-series rules)
+// ============================================================
+//
+// KiCad 7 footprints carry the (stroke ...) block on graphics (K6 uses a flat
+// (width W)) and add (render_cache ...) to text plus a few K7-only objects.
+
+export async function applyFpK7toK6(ast, log, warnings) {
+    const stats = {
+        f20_header: false,
+        f21_stroke_to_width: 0,
+        f22_fill_no_to_none: 0,
+        f23_render_cache: 0,
+        f24_k7_features: 0,
+        f25_pad_attrs: 0,
+        f26_model_hide: 0,
+    };
+
+    // F20: Header downgrade (K7 footprints have no generator_version; generator is a bare atom)
+    setChildValue(ast, 'version', FP_VERSIONS.KICAD6.version);
+    removeChild(ast, 'generator_version');
+    const generatorNode = findChild(ast, 'generator');
+    if (generatorNode && generatorNode.children.length > 0 && generatorNode.children[0].type === 'string') {
+        generatorNode.children[0].type = 'atom';
+    }
+    stats.f20_header = true;
+    log.push(`F20: Version → ${FP_VERSIONS.KICAD6.version}, removed generator_version, unquoted generator`);
+
+    // F24: Remove K7-only objects (lossy)
+    for (const name of ['fp_text_box', 'image', 'net_tie_pad_groups', 'dimension']) {
+        const removed = removeAllChildren(ast, name);
+        if (removed > 0) {
+            stats.f24_k7_features += removed;
+            warnings.push(`Removed ${removed} (${name}) element(s) - KiCad 7 feature not available in KiCad 6`);
+        }
+    }
+
+    // F24b: Remove property nodes (KiCad 6 footprints do not support properties)
+    const removedProperties = removeAllChildren(ast, 'property');
+    if (removedProperties > 0) {
+        stats.f24_k7_features += removedProperties;
+        log.push(`F24b: Removed ${removedProperties} property node(s) from footprint`);
+    }
+
+    // F24c: Remove (group ...) nodes from footprint blocks (KiCad 6 does not support footprint-level groups)
+    const removedFpGroups = removeAllChildren(ast, 'group');
+    if (removedFpGroups > 0) {
+        stats.f24_k7_features += removedFpGroups;
+        log.push(`F24c: Removed ${removedFpGroups} group node(s) from footprint`);
+    }
+
+    transformFpK7toK6(ast, stats, log, warnings);
+
+    // Summary
+    log.push('--- K7→K6 Footprint Summary ---');
+    log.push(`F20 Header downgraded: ${stats.f20_header ? 'Yes' : 'No'}`);
+    log.push(`F21 stroke→width converted: ${stats.f21_stroke_to_width}`);
+    log.push(`F22 fill no→none converted: ${stats.f22_fill_no_to_none}`);
+    log.push(`F23 render_cache removed: ${stats.f23_render_cache}`);
+    log.push(`F24 K7-only objects removed: ${stats.f24_k7_features}`);
+    log.push(`F25 pad layer-connection attrs fixed: ${stats.f25_pad_attrs}`);
+    log.push(`F26 3D model hide removed: ${stats.f26_model_hide}`);
+}
+
+function transformFpK7toK6(node, stats, log, warnings) {
+    if (!node || node.type !== 'list') return;
+
+    // F21: (stroke (width W) (type T)) → (width W) in footprint graphics
+    const graphicElements = ['fp_line', 'fp_rect', 'fp_circle', 'fp_arc', 'fp_poly', 'fp_curve'];
+    if (graphicElements.includes(node.name)) {
+        const strokeIdx = node.children.findIndex(c => c.type === 'list' && c.name === 'stroke');
+        if (strokeIdx >= 0) {
+            const strokeNode = node.children[strokeIdx];
+            const widthNode = findChild(strokeNode, 'width');
+            if (widthNode && widthNode.children.length > 0 && widthNode.children[0].value !== '') {
+                node.children.splice(strokeIdx, 1, {
+                    type: 'list', name: 'width',
+                    children: [{ type: 'atom', value: widthNode.children[0].value }],
+                });
+            } else {
+                node.children.splice(strokeIdx, 1);
+            }
+            stats.f21_stroke_to_width++;
+        }
+    }
+
+    // F22: (fill no) → (fill none) in shapes
+    if (['fp_rect', 'fp_circle', 'fp_poly'].includes(node.name)) {
+        const fillNode = findChild(node, 'fill');
+        if (fillNode && fillNode.children.length > 0) {
+            const v = fillNode.children[0];
+            if (v.type === 'atom' && v.value === 'no') { v.value = 'none'; stats.f22_fill_no_to_none++; }
+        }
+    }
+
+    // F23: Remove (render_cache ...) from fp_text
+    // Also strip knockout layer attribute (KiCad 6 does not support knockout)
+    if (node.name === 'fp_text') {
+        const removed = removeAllChildren(node, 'render_cache');
+        if (removed > 0) stats.f23_render_cache += removed;
+
+        const layerNode = findChild(node, 'layer');
+        if (layerNode && layerNode.children.length > 1) {
+            const before = layerNode.children.length;
+            layerNode.children = layerNode.children.filter(c => c.value !== 'knockout');
+            if (layerNode.children.length < before) {
+                stats.f23_render_cache += (before - layerNode.children.length);
+            }
+        }
+    }
+
+    // F25: pad layer-connection attrs — bare flag / removal
+    if (node.name === 'pad') {
+        for (let i = node.children.length - 1; i >= 0; i--) {
+            const child = node.children[i];
+            if (child.type !== 'list') continue;
+            if (child.name === 'zone_layer_connections') {
+                node.children.splice(i, 1); stats.f25_pad_attrs++;
+            } else if (child.name === 'remove_unused_layers' || child.name === 'keep_end_layers') {
+                const value = child.children.length > 0 ? child.children[0].value : 'yes';
+                if (value === 'yes') child.children = [];
+                else node.children.splice(i, 1);
+                stats.f25_pad_attrs++;
+            }
+        }
+        const removedThermal = removeAllChildren(node, 'thermal_bridge_angle');
+        if (removedThermal > 0) stats.f25_pad_attrs += removedThermal;
+    }
+
+    // F25b: Remove (footprints ...) from keepout nodes
+    if (node.name === 'keepout') {
+        const removed = removeAllChildren(node, 'footprints');
+        if (removed > 0) stats.f25_pad_attrs += removed;
+    }
+
+    // F26: Remove (hide ...) from 3D model nodes
+    if (node.name === 'model') {
+        const removed = removeAllChildren(node, 'hide');
+        if (removed > 0) stats.f26_model_hide += removed;
+    }
+
+    // F23b: Remove color and face children from font nodes (KiCad 6 font does not support color or face/custom font)
+    if (node.name === 'font') {
+        const removedColor = removeAllChildren(node, 'color');
+        const removedFace = removeAllChildren(node, 'face');
+        if (removedColor > 0 || removedFace > 0) {
+            stats.f23_render_cache += (removedColor + removedFace);
+        }
+    }
+
+    for (const child of node.children) {
+        transformFpK7toK6(child, stats, log, warnings);
     }
 }

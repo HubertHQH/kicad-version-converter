@@ -5,8 +5,8 @@ A browser-based tool for downgrading KiCad schematic files (`.kicad_sch`), symbo
 - **KiCad 10 → KiCad 9** (schematics / symbol libraries / PCBs / footprints)
 - **KiCad 9 → KiCad 8**
 - **KiCad 8 → KiCad 7**
-- **KiCad 10 → KiCad 7** (chained: 10→9→8→7)
-- **KiCad 9 → KiCad 7** (chained: 9→8→7)
+- **KiCad 7 → KiCad 6**
+- **Chained downgrades**, e.g. KiCad 10 → KiCad 6 (10→9→8→7→6), KiCad 9 → KiCad 7, KiCad 8 → KiCad 6, etc.
 
 You can try it here: https://www.nextpcb.com/kicad-version-converter
 
@@ -15,8 +15,8 @@ You can try it here: https://www.nextpcb.com/kicad-version-converter
 - **Client-side conversion**: Purely front-end implementation — no server required, files are never uploaded anywhere
 - **Four file types**: Supports `.kicad_sch` (schematics), `.kicad_sym` (symbol libraries), `.kicad_pcb` (PCBs), and `.kicad_mod` (footprints)
 - **Batch processing**: Upload multiple files at once, convert and download as a bundle
-- **Auto-detection**: Automatically detects file type and version (KiCad 7/8/9/10) and applies the appropriate conversion rules
-- **Chained downgrade**: KiCad 10 → KiCad 7 automatically performs three-step conversion (10→9→8→7)
+- **Auto-detection**: Automatically detects file type and version (KiCad 6/7/8/9/10) and applies the appropriate conversion rules
+- **Chained downgrade**: e.g. KiCad 10 → KiCad 6 automatically performs four-step conversion (10→9→8→7→6)
 - **Conversion log**: Displays detailed conversion logs and warning messages
 
 ## Conversion Rules
@@ -62,6 +62,25 @@ You can try it here: https://www.nextpcb.com/kicad-version-converter
 | R14 | `(fields_autoplaced yes)` → `(fields_autoplaced)` (remove value parameter); remove `(dnp)` node |
 | R15 | Auto-convert embedded non-PNG images (e.g. BMP) to PNG using Canvas API (KiCad 7 only supports PNG) |
 
+### Schematic (.kicad_sch) — KiCad 7 → KiCad 6 (R20-R30)
+
+| Rule | Description |
+|------|-------------|
+| R20 | Header downgrade (`version` → `20211123`, remove `generator_version`) |
+| R21 | Remove KiCad 7-only features `text_box`/`textbox`, `simulation_model`/`sim_model`, `netclass_flag`/`directive_label`, and root-level graphic drawing primitives `(rectangle)`, `(circle)`, `(polyline)`, `(arc)`, `(bezier)` (lossy) |
+| R21b | Remove `(color ...)` from all `(font ...)` nodes (KiCad 6 font does not support custom colors) |
+| R22 | Recursively remove `exclude_from_sim` (no simulation exclusion in KiCad 6) |
+| R23 | Remove `(dnp ...)` from placed symbols; remove `exclude_from_sim`/`in_bom`/`on_board`/`dnp` from sheets |
+| R24 | Remove `(hide ...)` and `(alternate ...)` child lists from lib_symbol pins |
+| R25 | Remove placed-symbol pin UUID blocks `(pin "N" (uuid ...))` (KiCad 7-only; not used by KiCad 6 instances) |
+| R26 | Add legacy `(id N)` to symbol/sheet properties (KiCad 7 schematic properties omit ids; KiCad 6 requires them). Standard names get fixed ids (Reference 0, Value 1, …); custom fields get ids ≥5 |
+| R27 | Normalize sheet property names/ids: `Sheetname` → `"Sheet name"` (id 0), `Sheetfile` → `"Sheet file"` (id 1) |
+| R28 | Rebuild the KiCad 6 global `(symbol_instances ...)` + `(sheet_instances ...)` table at the root from the per-object KiCad 7 `(instances (project ...))` blocks |
+| R29 | Remove the now-redundant per-object `(instances ...)` blocks |
+| R30 | Downgrade `(fill (type color) (color ...))` → `(fill (type background))` (plain `(fill (color ...))` left untouched) |
+
+> ⚠️ **KiCad 6 verification note**: The KiCad 6 instance table is reconstructed heuristically from KiCad 7 hierarchy paths. Reference designators are also preserved in each symbol's `Reference` property, but deeply nested hierarchical projects should be re-opened in KiCad 6 to confirm the result.
+
 ### Symbol Library (.kicad_sym) — KiCad 10 → KiCad 9 (NS1-NS8)
 
 | Rule | Description |
@@ -92,6 +111,15 @@ You can try it here: https://www.nextpcb.com/kicad-version-converter
 | S12 | `(property "Description" ...)` → `(property "ki_description" ...)` (property name rename) |
 | S13 | `(hide yes)` → bare `hide`, `(bold yes)` → bare `bold`, `(italic yes)` → bare `italic` in `effects`/`font` |
 | S14 | Remove `(pin_numbers hide)` node; remove `hide` flag from `pin_names` |
+
+### Symbol Library (.kicad_sym) — KiCad 7 → KiCad 6 (S20-S23)
+
+| Rule | Description |
+|------|-------------|
+| S20 | Header downgrade (`version` → `20211014`, remove `generator_version`) |
+| S21 | Remove symbol text boxes (`text_box`/`textbox`) — KiCad 7 feature (lossy) |
+| S22 | Remove `(hide ...)` and `(alternate ...)` child lists from pins |
+| S23 | Downgrade `(fill (type color) (color ...))` → `(fill (type background))` |
 
 ### PCB (.kicad_pcb) — KiCad 10 → KiCad 9 (NP1-NP11)
 
@@ -152,6 +180,24 @@ You can try it here: https://www.nextpcb.com/kicad-version-converter
 | P27 | Remove K8-only flags from footprint `(attr ...)` (`dnp`, `allow_missing_courtyard`) |
 | P28 | Remove top-level `(generated ...)` elements (tuning patterns and other KiCad 8-only features; not supported in K7) |
 
+### PCB (.kicad_pcb) — KiCad 7 → KiCad 6 (P40-P49)
+
+| Rule | Description |
+|------|-------------|
+| P40 | Header downgrade (`version` → `20211014`, remove `generator_version`, unquote `generator`) |
+| P41 | Remove KiCad 7-only features: `gr_text_box`/`fp_text_box`/`text_box`, `image`, `net_tie`/`net_ties`/`net_tie_pad_groups` (lossy) |
+| P41b | Move footprint-level `(dimension ...)` nodes to the root PCB level (KiCad 6 does not support dimensions inside footprints) |
+| P42 | `(stroke (width W) (type T))` → `(width W)` in all `gr_*`/`fp_*` graphic shapes (KiCad 6 uses flat width) |
+| P43 | `pcbplotparams` booleans `yes`/`no` → `true`/`false` |
+| P44 | `(fill no)` → `(fill none)` in graphic shapes |
+| P45 | Remove `(render_cache ...)` from `gr_text`/`fp_text` |
+| P46 | Via layer-connection attrs: `(remove_unused_layers yes)`/`(keep_end_layers yes)` → bare flag (removed when `no`); remove `(zone_layer_connections ...)` and `(free ...)` |
+| P47 | Remove `(thermal_bridge_angle ...)` from pads/zones; remove `(attr ...)` from zones |
+| P48 | Dimension downgrade: `(type radial)` → `(type leader)` and remove the radial-only `(leader_length ...)` — **radial dimensions are a KiCad 7 feature; KiCad 6 only supports `aligned`/`orthogonal`/`leader`/`center`, so an un-downgraded `(type radial)` makes the whole board fail to load (crash on open)**. Also remove `(arrow_direction ...)` from dimension style |
+| P49 | Remove `(hide ...)` from 3D `model` nodes |
+
+> ⚠️ **Radial dimension note (lossy)**: KiCad 6 has no radial dimension type. P48 rewrites `(type radial)` to the closest analog, a `leader` dimension (leader line + text), preserving the text/format (including `override_value`) and dropping the radial-only `leader_length`. The annotation survives but its semantics degrade from a true radial/diameter measurement to a plain leader callout. A warning is emitted per converted dimension. (These radial dimensions often live *inside* footprints in KiCad 7; P41b first lifts them to the board root, then P48 downgrades the type.)
+
 ### Footprint (.kicad_mod) — KiCad 10 → KiCad 9 (NF1-NF2)
 
 | Rule | Description |
@@ -172,7 +218,7 @@ You can try it here: https://www.nextpcb.com/kicad-version-converter
 
 | Rule | Description |
 |------|-------------|
-| F10 | Header downgrade (`version` → `20211014`, remove `generator_version`, unquote `generator`) |
+| F10 | Header downgrade (`version` → `20221018`, remove `generator_version`, unquote `generator`) |
 | F11 | `(uuid "xxx")` → `(tstamp xxx)` (global recursive) |
 | F12 | `(property "Reference" ...)` → `(fp_text reference ...)`; `(property "Value" ...)` → `(fp_text value ...)` |
 | F13 | Remove `(property "Footprint")`, `(property "Datasheet")`, `(property "Description")` and custom properties |
@@ -181,6 +227,20 @@ You can try it here: https://www.nextpcb.com/kicad-version-converter
 | F16 | Pad attribute compatibility: `(remove_unused_layers yes)` → bare flag / remove when `no`; remove `(pintype)`, `(pinfunction)`, `(teardrops)` |
 | F17 | `(hide yes)` → bare `hide`, `(bold yes)` → bare `bold`, `(italic yes)` → bare `italic`; remove `(unlocked yes)` |
 | F18 | Unquote pad wildcard layer names: `"*.Cu"` → `*.Cu` (KiCad 7 uses unquoted atoms) |
+
+### Footprint (.kicad_mod) — KiCad 7 → KiCad 6 (F20-F26)
+
+| Rule | Description |
+|------|-------------|
+| F20 | Header downgrade (`version` → `20211014`, remove `generator_version`, unquote `generator`) |
+| F21 | `(stroke (width W) (type T))` → `(width W)` in `fp_line`/`fp_rect`/`fp_circle`/`fp_arc`/`fp_poly`/`fp_curve` |
+| F22 | `(fill no)` → `(fill none)` in shapes |
+| F23 | Remove `(render_cache ...)` from `fp_text` |
+| F24 | Remove KiCad 7-only objects (`fp_text_box`, `image`, `net_tie_pad_groups`) — lossy |
+| F25 | Pad layer-connection attrs: `(remove_unused_layers yes)`/`(keep_end_layers yes)` → bare flag (removed when `no`); remove `(zone_layer_connections ...)` and `(thermal_bridge_angle ...)` |
+| F26 | Remove `(hide ...)` from 3D `model` nodes |
+
+> **Footprint version note**: The footprint format stamp for KiCad 7 is `20221018` and for KiCad 6 is `20211014`. (The K8→K7 footprint rule F10 now writes `20221018`.)
 
 ## Quick Start
 
@@ -199,7 +259,7 @@ npm run build
 
 - **React** + **Vite** — Front-end framework and build tool
 - **S-expression Parser** — Custom KiCad S-expression parser (`src/lib/sexpr-parser.js`)
-- **Converter** — AST-based version conversion engine (`src/lib/converter.js` + `src/lib/sym-converter.js` + `src/lib/pcb-converter.js` + `src/lib/fp-converter.js`), supporting KiCad 10/9/8/7 chained downgrade
+- **Converter** — AST-based version conversion engine (`src/lib/converter.js` + `src/lib/sym-converter.js` + `src/lib/pcb-converter.js` + `src/lib/fp-converter.js`), supporting KiCad 10/9/8/7/6 chained downgrade
 
 ## Project Structure
 

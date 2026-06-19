@@ -5,9 +5,10 @@
  *   KiCad 10 → KiCad 9
  *   KiCad 9 → KiCad 8
  *   KiCad 8 → KiCad 7
- *   KiCad 10 → KiCad 7 (chained: 10→9→8→7)
+ *   KiCad 7 → KiCad 6
+ *   Chained downgrades, e.g. KiCad 10 → KiCad 6 (10→9→8→7→6)
  * 
- * Conversion rules (K10 → K9): NP1-NP10
+ * Conversion rules (K10 → K9): NP1-NP11
  *   NP1: Header version/generator downgrade
  *   NP2: tenting nested format → compact format
  *   NP3: Remove setup covering/plugging/capping/filling
@@ -20,7 +21,7 @@
  *   NP10: Restore footprint Datasheet/Description unlocked + font thickness
  *   NP11: Remove (radius ...) from gr_rect/fp_rect (K10 rounded rect, not supported in K9)
  * 
- * Conversion rules (K9 → K8): P1-P9
+ * Conversion rules (K9 → K8): P1-P9, P21-P23, P27
  *   P1: Header version/generator downgrade
  *   P2: Layer IDs: K9 new scheme → K8 legacy (0-49)
  *   P3: layerselection bitmask: 128-bit → compact format
@@ -35,8 +36,9 @@
  *        convert (suppress_zeroes yes) list to bare atom in dimension format
  *   P22: Remove (placement ...) from zone definitions (multi-channel auto-placement area, K9 only)
  *   P23: Rename (curved_edges ...) → (curve_points ...) in pad teardrops
+ *   P27: Rename (solder_paste_margin_ratio) → (solder_paste_ratio) in footprints/pads
  * 
- * Conversion rules (K8 → K7): P10-P20
+ * Conversion rules (K8 → K7): P10-P28
  *   P10: Header downgrade (version, remove generator_version, unquote generator)
  *   P11: (uuid "xxx") → (tstamp xxx) everywhere
  *   P12: (property "Reference" ...) → (fp_text reference ...)
@@ -60,8 +62,18 @@
  *   P27: Remove K8-only attr flags (dnp, allow_missing_courtyard) from footprints
  *   P28: Remove top-level (generated ...) elements (tuning patterns etc.) — K7 doesn't support them
  *
- * Additional K9→K8 rules:
- *   P27: Rename (solder_paste_margin_ratio) → (solder_paste_ratio) in footprints/pads
+ * Conversion rules (K7 → K6): P40-P49
+ *   P40: Header downgrade (version → 20211014, remove generator_version, unquote generator)
+ *   P41: Remove K7-only objects: gr_text_box, fp_text_box, image, net_tie/net_ties/net_tie_pad_groups (lossy)
+ *   P42: (stroke (width W) (type T)) → (width W) in all gr_* or fp_* graphic shapes
+ *   P43: pcbplotparams booleans yes/no → true/false
+ *   P44: (fill no) → (fill none) in graphic shapes
+ *   P45: Remove (render_cache ...) from gr_text/fp_text
+ *   P46: Via layer-connection attrs: bare flag / removal for remove_unused_layers/keep_end_layers; remove zone_layer_connections/free
+ *   P47: Remove (thermal_bridge_angle ...) from pads/zones; remove (attr ...) from zones
+ *   P48: Dimension downgrade — radial → leader (K6 has no radial type; drop leader_length);
+ *        remove (arrow_direction ...) from dimension style
+ *   P49: Remove (hide ...) from 3D model nodes
  */
 
 import {
@@ -77,6 +89,7 @@ import {
 // --- Version Definitions (PCB specific) ---
 
 const PCB_VERSIONS = {
+    KICAD6: { version: '20211014', generatorVersion: null, label: 'KiCad 6' },
     KICAD7: { version: '20221018', generatorVersion: null, label: 'KiCad 7' },
     KICAD8: { version: '20240108', generatorVersion: '8.0', label: 'KiCad 8' },
     KICAD9: { version: '20241229', generatorVersion: '9.0', label: 'KiCad 9' },
@@ -1413,4 +1426,278 @@ function transformFootprintK8toK7(fpNode, stats, log, warnings) {
         });
         stats.p15_sheetname_sheetfile++;
     }
+}
+
+// ============================================================
+//  KiCad 7 → KiCad 6 Conversion (PCB, P40-series rules)
+// ============================================================
+//
+// KiCad 7 PCB changes over KiCad 6: graphic shapes use the (stroke ...) block
+// (K6 uses a flat (width W)), text carries (render_cache ...), several new
+// objects (text boxes, images, net ties) were added, and pcbplotparams booleans
+// are written as yes/no (K6 uses true/false).
+
+export async function applyPcbK7toK6(ast, log, warnings) {
+    const stats = {
+        p40_header: false,
+        p41_k7_features: 0,
+        p41b_moved_dimensions: 0,
+        p42_stroke_to_width: 0,
+        p43_plotparam_bools: 0,
+        p44_fill_no_to_none: 0,
+        p45_render_cache: 0,
+        p46_via_attrs: 0,
+        p47_thermal_zone_attrs: 0,
+        p48_dimension_style: 0,
+        p49_model_hide: 0,
+    };
+
+    // P40: Header downgrade (K7 PCBs have no generator_version; generator is a bare atom)
+    setChildValue(ast, 'version', PCB_VERSIONS.KICAD6.version);
+    removeChild(ast, 'generator_version');
+    const generatorNode = findChild(ast, 'generator');
+    if (generatorNode && generatorNode.children.length > 0 && generatorNode.children[0].type === 'string') {
+        generatorNode.children[0].type = 'atom';
+    }
+    stats.p40_header = true;
+    log.push(`P40: Version → ${PCB_VERSIONS.KICAD6.version}, removed generator_version, unquoted generator`);
+
+    // P41: Remove K7-only objects that K6 cannot represent (lossy)
+    const k7Features = ['gr_text_box', 'fp_text_box', 'text_box', 'textbox', 'image',
+        'net_tie', 'net_ties', 'net_tie_pad_groups'];
+    for (const name of k7Features) {
+        const removed = removeDescendantsByName(ast, name);
+        if (removed > 0) {
+            stats.p41_k7_features += removed;
+            warnings.push(`Removed ${removed} (${name}) element(s) - KiCad 7 feature not available in KiCad 6`);
+        }
+    }
+
+    // P43: pcbplotparams booleans yes/no → true/false
+    const setupNode = findChild(ast, 'setup');
+    if (setupNode) {
+        const pcbplotparams = findChild(setupNode, 'pcbplotparams');
+        if (pcbplotparams) {
+            for (const child of pcbplotparams.children) {
+                if (child.type !== 'list' || child.children.length === 0) continue;
+                const valChild = child.children[child.children.length - 1];
+                if (valChild.type === 'atom' && valChild.value === 'yes') {
+                    valChild.value = 'true'; stats.p43_plotparam_bools++;
+                } else if (valChild.type === 'atom' && valChild.value === 'no') {
+                    valChild.value = 'false'; stats.p43_plotparam_bools++;
+                }
+            }
+        }
+    }
+
+    // P41b: Move dimensions inside footprints to the root kicad_pcb level
+    // KiCad 6 does not support dimension nodes inside footprints but supports them at the root level of kicad_pcb.
+    // Since coordinates are absolute, they render identically.
+    const footprints = findChildren(ast, 'footprint');
+    for (const fp of footprints) {
+        const dimensions = findChildren(fp, 'dimension');
+        for (const dim of dimensions) {
+            const idx = fp.children.indexOf(dim);
+            if (idx >= 0) {
+                fp.children.splice(idx, 1);
+            }
+            ast.children.push(dim);
+            stats.p41b_moved_dimensions++;
+        }
+    }
+    if (stats.p41b_moved_dimensions > 0) {
+        log.push(`P41b: Moved ${stats.p41b_moved_dimensions} dimension(s) from footprints to root level`);
+    }
+
+    // P41c: Remove custom/unsupported property nodes from footprints (KiCad 6 only supports Sheetname and Sheetfile properties inside footprints)
+    let removedFpProperties = 0;
+    for (const fp of footprints) {
+        for (let i = fp.children.length - 1; i >= 0; i--) {
+            const child = fp.children[i];
+            if (child.type === 'list' && child.name === 'property') {
+                if (child.children.length > 0) {
+                    const propName = child.children[0].value;
+                    if (propName !== 'Sheetname' && propName !== 'Sheetfile') {
+                        fp.children.splice(i, 1);
+                        removedFpProperties++;
+                    }
+                } else {
+                    fp.children.splice(i, 1);
+                    removedFpProperties++;
+                }
+            }
+        }
+    }
+    if (removedFpProperties > 0) {
+        stats.p41_k7_features += removedFpProperties;
+        log.push(`P41c: Removed ${removedFpProperties} property node(s) from footprints`);
+    }
+
+    // P41d: Remove (group ...) nodes from footprint blocks (KiCad 6 does not support footprint-level groups)
+    let removedFpGroups = 0;
+    for (const fp of footprints) {
+        const removed = removeAllChildren(fp, 'group');
+        removedFpGroups += removed;
+    }
+    if (removedFpGroups > 0) {
+        stats.p41_k7_features += removedFpGroups;
+        log.push(`P41d: Removed ${removedFpGroups} group node(s) from footprints`);
+    }
+
+    // P42, P44-P49: recursive transformation
+    transformPcbK7toK6(ast, stats, log, warnings);
+
+    // Summary
+    log.push('--- K7→K6 PCB Summary ---');
+    log.push(`P40 Header downgraded: ${stats.p40_header ? 'Yes' : 'No'}`);
+    log.push(`P41 K7-only objects removed: ${stats.p41_k7_features}`);
+    log.push(`P41b Dimensions moved to root: ${stats.p41b_moved_dimensions}`);
+    log.push(`P42 stroke→width converted: ${stats.p42_stroke_to_width}`);
+    log.push(`P43 pcbplotparams yes/no→true/false: ${stats.p43_plotparam_bools}`);
+    log.push(`P44 fill no→none converted: ${stats.p44_fill_no_to_none}`);
+    log.push(`P45 render_cache removed: ${stats.p45_render_cache}`);
+    log.push(`P46 via layer-connection attrs fixed: ${stats.p46_via_attrs}`);
+    log.push(`P47 thermal/zone attrs removed: ${stats.p47_thermal_zone_attrs}`);
+    log.push(`P48 dimension style fixed: ${stats.p48_dimension_style}`);
+    log.push(`P49 3D model hide removed: ${stats.p49_model_hide}`);
+}
+
+const PCB_GRAPHIC_SHAPES = ['gr_line', 'gr_arc', 'gr_circle', 'gr_rect', 'gr_poly', 'gr_curve',
+    'fp_line', 'fp_arc', 'fp_circle', 'fp_rect', 'fp_poly', 'fp_curve'];
+const PCB_FILL_SHAPES = ['gr_rect', 'gr_circle', 'gr_poly', 'fp_rect', 'fp_circle', 'fp_poly'];
+
+function transformPcbK7toK6(node, stats, log, warnings) {
+    if (!node || node.type !== 'list') return;
+
+    // P42: (stroke (width W) (type T)) → (width W) in graphic shapes
+    if (PCB_GRAPHIC_SHAPES.includes(node.name)) {
+        const strokeIdx = node.children.findIndex(c => c.type === 'list' && c.name === 'stroke');
+        if (strokeIdx >= 0) {
+            const strokeNode = node.children[strokeIdx];
+            const widthNode = findChild(strokeNode, 'width');
+            if (widthNode && widthNode.children.length > 0 && widthNode.children[0].value !== '') {
+                node.children.splice(strokeIdx, 1, {
+                    type: 'list', name: 'width',
+                    children: [{ type: 'atom', value: widthNode.children[0].value }],
+                });
+            } else {
+                node.children.splice(strokeIdx, 1);
+            }
+            stats.p42_stroke_to_width++;
+        }
+    }
+
+    // P44: (fill no) → (fill none) in graphic shapes
+    if (PCB_FILL_SHAPES.includes(node.name)) {
+        const fillNode = findChild(node, 'fill');
+        if (fillNode && fillNode.children.length > 0) {
+            const v = fillNode.children[0];
+            if (v.type === 'atom' && v.value === 'no') { v.value = 'none'; stats.p44_fill_no_to_none++; }
+        }
+    }
+
+    // P45: Remove (render_cache ...) from text
+    // Also strip knockout layer attribute (KiCad 6 does not support knockout)
+    if (node.name === 'gr_text' || node.name === 'fp_text') {
+        const removed = removeAllChildren(node, 'render_cache');
+        if (removed > 0) stats.p45_render_cache += removed;
+
+        const layerNode = findChild(node, 'layer');
+        if (layerNode && layerNode.children.length > 1) {
+            const before = layerNode.children.length;
+            layerNode.children = layerNode.children.filter(c => c.value !== 'knockout');
+            if (layerNode.children.length < before) {
+                stats.p45_render_cache += (before - layerNode.children.length);
+            }
+        }
+    }
+
+    // P46: via layer-connection attrs — bare flag / removal
+    if (node.name === 'via') {
+        for (let i = node.children.length - 1; i >= 0; i--) {
+            const child = node.children[i];
+            if (child.type !== 'list') continue;
+            if (child.name === 'zone_layer_connections' || child.name === 'free') {
+                node.children.splice(i, 1); stats.p46_via_attrs++;
+            } else if (child.name === 'remove_unused_layers' || child.name === 'keep_end_layers') {
+                const value = child.children.length > 0 ? child.children[0].value : 'yes';
+                if (value === 'yes') child.children = [];
+                else node.children.splice(i, 1);
+                stats.p46_via_attrs++;
+            }
+        }
+    }
+
+    // P47: Remove thermal_bridge_angle from pad/zone; remove zone (attr ...)
+    if (node.name === 'pad' || node.name === 'zone') {
+        const removed = removeAllChildren(node, 'thermal_bridge_angle');
+        if (removed > 0) stats.p47_thermal_zone_attrs += removed;
+    }
+    if (node.name === 'zone') {
+        const removed = removeAllChildren(node, 'attr');
+        if (removed > 0) stats.p47_thermal_zone_attrs += removed;
+    }
+
+    // P47b: Remove (footprints ...) from keepout nodes
+    if (node.name === 'keepout') {
+        const removed = removeAllChildren(node, 'footprints');
+        if (removed > 0) stats.p47_thermal_zone_attrs += removed;
+    }
+
+    // P48: Dimension compatibility for KiCad 6
+    if (node.name === 'dimension') {
+        // P48a: Radial dimensions are a KiCad 7 feature. KiCad 6 only supports
+        // aligned/orthogonal/leader/center, so its dimension parser rejects
+        // (type radial) — which makes the whole board fail to load (crash on open).
+        // Downgrade (type radial) → (type leader), the closest K6 analog (a leader
+        // line + text), and drop the radial-only (leader_length ...) token that K6
+        // does not accept. The text/format (incl. override_value) and style are
+        // preserved, so the annotation survives.
+        const typeNode = findChild(node, 'type');
+        if (typeNode && typeNode.children.length > 0 && typeNode.children[0].value === 'radial') {
+            typeNode.children[0].value = 'leader';
+            removeAllChildren(node, 'leader_length');
+            stats.p48_dimension_style++;
+            warnings.push(`Converted radial dimension → leader dimension - radial dimensions are a KiCad 7 feature not supported by KiCad 6`);
+        }
+
+        // P48b: Remove (arrow_direction ...) from dimension style (K7 has no such field; defensive)
+        const styleNode = findChild(node, 'style');
+        if (styleNode) {
+            const removed = removeAllChildren(styleNode, 'arrow_direction');
+            if (removed > 0) stats.p48_dimension_style += removed;
+        }
+    }
+
+    // P49: Remove (hide ...) from 3D model nodes
+    if (node.name === 'model') {
+        const removed = removeAllChildren(node, 'hide');
+        if (removed > 0) stats.p49_model_hide += removed;
+    }
+
+    // P45b: Remove color and face children from font nodes (KiCad 6 font does not support color or face/custom font)
+    if (node.name === 'font') {
+        const removedColor = removeAllChildren(node, 'color');
+        const removedFace = removeAllChildren(node, 'face');
+        if (removedColor > 0 || removedFace > 0) {
+            stats.p45_render_cache += (removedColor + removedFace);
+        }
+    }
+
+    for (const child of node.children) {
+        transformPcbK7toK6(child, stats, log, warnings);
+    }
+}
+
+/** Recursively remove all list descendants with the given head name. Returns count. */
+function removeDescendantsByName(node, name) {
+    if (!node || node.type !== 'list') return 0;
+    let removed = 0;
+    const before = node.children.length;
+    node.children = node.children.filter(c => !(c.type === 'list' && c.name === name));
+    removed += before - node.children.length;
+    for (const child of node.children) {
+        removed += removeDescendantsByName(child, name);
+    }
+    return removed;
 }

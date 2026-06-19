@@ -356,6 +356,10 @@ body {
   color: #f59e0b;
 }
 
+.file-info-version.k6 {
+  color: #16a34a;
+}
+
 .file-info-actions {
   display: flex;
   gap: 0.5rem;
