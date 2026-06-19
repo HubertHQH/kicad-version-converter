@@ -6,7 +6,8 @@
  *   KiCad 9 → KiCad 8
  *   KiCad 8 → KiCad 7
  *   KiCad 7 → KiCad 6
- *   Chained downgrades, e.g. KiCad 10 → KiCad 6 (10→9→8→7→6)
+ *   KiCad 6 → KiCad 5
+ *   Chained downgrades, e.g. KiCad 10 → KiCad 5 (10→9→8→7→6→5)
  * 
  * Conversion rules (K10 → K9): NP1-NP11
  *   NP1: Header version/generator downgrade
@@ -74,6 +75,37 @@
  *   P48: Dimension downgrade — radial → leader (K6 has no radial type; drop leader_length);
  *        remove (arrow_direction ...) from dimension style
  *   P49: Remove (hide ...) from 3D model nodes
+ *
+ * Conversion rules (K6 → K5): P50-P64
+ *   P50: Header downgrade (version → 20171130; (generator pcbnew) → (host pcbnew "(5.1.5)");
+ *        (paper ...) → (page ...) — K5 only knows the (page ...) token)
+ *   P51: Layers block — drop the K6 descriptive 3rd field, unquote layer names,
+ *        rename User.Drawings/etc., and remove K6 user layers absent from K5's
+ *        fixed layer set (User.1..User.9); P51b remaps stranded object refs
+ *   P52: Remove (stackup ...) from setup (K6 board stackup; K5 has none)
+ *   P53: (footprint ...) → (module ...); unquote name only when bare-safe (parens/
+ *        space names stay quoted); drop K6-only footprint children (property, group,
+ *        attr→smd/virtual map, net_tie_pad_groups)
+ *   P54: Graphic arcs (gr_arc/fp_arc) 3-point (start/mid/end) → (start=center)(end)(angle)
+ *   P55: roundrect/custom pads → rect; drop roundrect_rratio/chamfer/options/primitives,
+ *        pinfunction/pintype/zone_layer_connections/remove_unused_layers
+ *   P56: Zones — remove filled_areas_thickness/name/attr; drop keepout zones;
+ *        split multilayer zones to one zone per layer; clean filled_polygon (layer/island)
+ *   P57: gr_rect/fp_rect → 4 line segments (K5 has no rect primitive)
+ *   P58: Track (arc ...) curved traces → straight (segment ...) approximation (lossy)
+ *   P59: Remove K6-only via attrs (free, remove_unused_layers, zone_layer_connections)
+ *   P60: Remove all (tstamp ...)/(uuid ...) identifiers (K5 regenerates 8-hex stamps);
+ *        truncate footprint (path ...) UUID segments to 8 hex
+ *   P61: Drop K6 parametric dimensions (incompatible with K5's explicit feature/arrow
+ *        geometry format) — lossy, with warning
+ *   P62: 3D model (offset (xyz ...)) → (at (xyz ...)) (K5 model node uses 'at')
+ *   P63: Remove (fill ...) from graphic shapes (fp_poly/fp_circle/gr_poly/...);
+ *        K5's graphic parser rejects it. Zone fill is left intact.
+ *   P64: Remove (group ...) nodes (K6 object grouping, board-level + nested);
+ *        K5 has no groups ("Unknown token group"). Members kept, ungrouped.
+ *
+ *   Note: K6-only pcbplotparams (dxf..., svg..., sketchpadsonfab, disableapertmacros) are
+ *   left as-is — KiCad 5's pcbplotparams sub-parser silently skips unknown tokens.
  */
 
 import {
@@ -89,6 +121,7 @@ import {
 // --- Version Definitions (PCB specific) ---
 
 const PCB_VERSIONS = {
+    KICAD5: { version: '20171130', generatorVersion: null, label: 'KiCad 5' },
     KICAD6: { version: '20211014', generatorVersion: null, label: 'KiCad 6' },
     KICAD7: { version: '20221018', generatorVersion: null, label: 'KiCad 7' },
     KICAD8: { version: '20240108', generatorVersion: '8.0', label: 'KiCad 8' },
@@ -1700,4 +1733,600 @@ function removeDescendantsByName(node, name) {
         removed += removeDescendantsByName(child, name);
     }
     return removed;
+}
+
+// ============================================================
+//  KiCad 6 → KiCad 5 Conversion (PCB, P50-series rules)
+// ============================================================
+//
+// KiCad 5/6 is a *board-format* boundary even though both are S-expressions:
+// the version stamp drops 20211014 → 20171130, footprints become (module)s,
+// graphic arcs change from a 3-point (start/mid/end) form back to the legacy
+// center+angle form, board stackup / zone-thickness / keepout features
+// disappear, and modern roundrect/custom pads collapse to plain rectangles.
+// UUID (tstamp ...)/(uuid ...) identifiers are removed — KiCad 5 uses 8-hex
+// stamps and regenerates them on load; net-based connectivity is preserved.
+//
+// NOTE: arc center/angle geometry and zone/track approximations follow the
+// AskStr/kicad-backport-cplus reference but could not be validated against a
+// real KiCad 5 install. Verify converted boards in KiCad 5.
+
+const K6_TO_K5_LAYER_RENAME = {
+    'User.Drawings': 'Dwgs.User',
+    'User.Comments': 'Cmts.User',
+    'User.Eco1': 'Eco1.User',
+    'User.Eco2': 'Eco2.User',
+};
+
+// KiCad 5's fixed layer set (the "fixed layer hash"). Any board layer whose name
+// is not here has no K5 slot — most notably KiCad 6's User.1..User.9 (IDs 50-58).
+// KiCad 5 rejects such a board: 'Layer "User.1" ... is not in fixed layer hash'.
+const K5_VALID_PCB_LAYERS = new Set([
+    'F.Cu', 'B.Cu',
+    ...Array.from({ length: 30 }, (_, i) => `In${i + 1}.Cu`),
+    'B.Adhes', 'F.Adhes', 'B.Paste', 'F.Paste', 'B.SilkS', 'F.SilkS', 'B.Mask', 'F.Mask',
+    'Dwgs.User', 'Cmts.User', 'Eco1.User', 'Eco2.User', 'Edge.Cuts', 'Margin',
+    'B.CrtYd', 'F.CrtYd', 'B.Fab', 'F.Fab',
+]);
+
+// The K5 fallback layer for objects stranded on a removed (User.N) layer.
+const K5_REMOVED_LAYER_FALLBACK = 'Dwgs.User';
+
+/** A KiCad layer-set token (e.g. *.Cu, *.Mask, F&B.Cu) — valid in K5, never remap. */
+function isLayerSetToken(value) {
+    return value.includes('*') || value.includes('&');
+}
+
+/**
+ * Remap any object layer reference ((layer X) / pad (layers ... X ...)) that names
+ * a concrete layer KiCad 5 doesn't have (e.g. User.1..User.9) to a valid K5 layer,
+ * so K5 doesn't choke on a dangling name. Layer-set wildcards (*.Cu, F&B.Cu) and
+ * already-valid names are left as-is. Skips the top-level (layers ...) DEFINITION
+ * block (its children are lists, not the atom/string refs this touches).
+ */
+function remapInvalidLayerRefs(node, validSet, fallback, stats) {
+    if (!node || node.type !== 'list') return;
+    if (node.name === 'layer' || node.name === 'layers') {
+        for (const c of node.children) {
+            if ((c.type === 'atom' || c.type === 'string')
+                && !validSet.has(c.value) && !isLayerSetToken(c.value)) {
+                c.value = fallback;
+                c.type = 'atom';
+                stats.p51_layer_refs = (stats.p51_layer_refs || 0) + 1;
+            }
+        }
+    }
+    for (const c of node.children) remapInvalidLayerRefs(c, validSet, fallback, stats);
+}
+
+export async function applyPcbK6toK5(ast, log, warnings) {
+    const stats = {
+        p50_header: false,
+        p51_layers: 0,
+        p52_stackup: 0,
+        p53_modules: 0,
+        p54_arcs: 0,
+        p55_pads: 0,
+        p56_zones: 0,
+        p57_rects: 0,
+        p58_track_arcs: 0,
+        p59_via_attrs: 0,
+        p60_tstamps: 0,
+        p61_dimensions: 0,
+        p62_model_offset: 0,
+        p63_graphic_fill: 0,
+        p64_groups: 0,
+    };
+
+    // P50: Header downgrade. KiCad 5 PCBs identify the writer with
+    // (host pcbnew "(5.1.x)") — NOT the K6+ (generator ...) line. The K5 parser
+    // reads that line with three NeedSYMBOL() calls (host, app name, build
+    // version), so the two-token (generator pcbnew) makes it fail on load with
+    //   Expecting "'symbol'" ... line 3
+    // (it hits the closing paren where the build-version symbol should be).
+    // Rename generator → host and supply the build-version string.
+    setChildValue(ast, 'version', PCB_VERSIONS.KICAD5.version);
+    removeChild(ast, 'generator_version');
+    const hostChildren = [
+        { type: 'atom', value: 'pcbnew' },
+        { type: 'string', value: '(5.1.5)' },
+    ];
+    const generatorNode = findChild(ast, 'generator');
+    if (generatorNode) {
+        generatorNode.name = 'host';
+        generatorNode.children = hostChildren;
+    } else if (!findChild(ast, 'host')) {
+        // No generator/host present — insert a host line right after (version ...).
+        const versionIdx = ast.children.findIndex(c => c.type === 'list' && c.name === 'version');
+        const insertIdx = versionIdx >= 0 ? versionIdx + 1 : 0;
+        ast.children.splice(insertIdx, 0, { type: 'list', name: 'host', children: hostChildren });
+    }
+    stats.p50_header = true;
+    log.push(`P50: Version → ${PCB_VERSIONS.KICAD5.version}, generator → (host pcbnew "(5.1.5)")`);
+
+    // P50b: Page settings. KiCad 6 renamed (page ...) → (paper ...); KiCad 5
+    // only knows (page ...) and errors with: Unknown token "paper".
+    const paperNode = findChild(ast, 'paper');
+    if (paperNode) {
+        paperNode.name = 'page';
+        log.push('P50: Renamed (paper ...) → (page ...)');
+    }
+
+    // P51: Layers block — rename K6 user layers, drop the descriptive 3rd field,
+    // unquote names, and REMOVE layers KiCad 5 has no slot for (User.1..User.9).
+    const layersNode = findChild(ast, 'layers');
+    const removedLayerNames = new Set();
+    if (layersNode) {
+        const keptDefs = [];
+        for (const layerDef of layersNode.children) {
+            if (layerDef.type !== 'list' || layerDef.children.length === 0) { keptDefs.push(layerDef); continue; }
+            const nameChild = layerDef.children[0];
+            if (nameChild && (nameChild.type === 'string' || nameChild.type === 'atom')) {
+                if (K6_TO_K5_LAYER_RENAME[nameChild.value]) {
+                    nameChild.value = K6_TO_K5_LAYER_RENAME[nameChild.value];
+                }
+                nameChild.type = 'atom';
+            }
+            // Keep only [name, type]; drop the K6 descriptive user-name (3rd field)
+            if (layerDef.children.length > 2) {
+                layerDef.children = layerDef.children.slice(0, 2);
+            }
+            // Drop layers with no KiCad 5 equivalent (User.1..User.9 etc.)
+            if (nameChild && !K5_VALID_PCB_LAYERS.has(nameChild.value)) {
+                removedLayerNames.add(nameChild.value);
+                continue;
+            }
+            keptDefs.push(layerDef);
+            stats.p51_layers++;
+        }
+        layersNode.children = keptDefs;
+        if (removedLayerNames.size > 0) {
+            const names = [...removedLayerNames].join(', ');
+            log.push(`P51: Removed ${removedLayerNames.size} K6 user layer(s) absent from KiCad 5: ${names}`);
+            warnings.push(`Removed KiCad 6 user layers with no KiCad 5 equivalent (${names}); any objects on them were moved to ${K5_REMOVED_LAYER_FALLBACK}`);
+        }
+        log.push(`P51: Normalized ${stats.p51_layers} layer definition(s) to KiCad 5 form`);
+    }
+
+    // P51b: Remap object references to any non-K5 concrete layer onto a valid K5
+    // layer (no-op when nothing used those layers, as in default K6 exports).
+    // Layer-set wildcards (*.Cu, F&B.Cu) on pads are preserved.
+    remapInvalidLayerRefs(ast, K5_VALID_PCB_LAYERS, K5_REMOVED_LAYER_FALLBACK, stats);
+    if (stats.p51_layer_refs) {
+        log.push(`P51b: Remapped ${stats.p51_layer_refs} object layer reference(s) → ${K5_REMOVED_LAYER_FALLBACK}`);
+    }
+
+    // P52: Remove (stackup ...) from setup
+    const setupNode = findChild(ast, 'setup');
+    if (setupNode) {
+        const removed = removeAllChildren(setupNode, 'stackup');
+        if (removed > 0) {
+            stats.p52_stackup += removed;
+            log.push(`P52: Removed (stackup) from setup`);
+        }
+    }
+
+    // P53/P54/...: recursive transformation (footprints, arcs, pads, zones, etc.)
+    transformPcbK6toK5(ast, stats, log, warnings);
+
+    // P64: Remove (group ...) nodes — KiCad 6 object grouping (board-level and any
+    // nested). KiCad 5 has no groups and rejects the token ("Unknown token group").
+    // Members remain as ungrouped objects. (Footprint groups were already dropped
+    // in downgradeFootprintToModule; this also catches the top-level board groups.)
+    const removedGroups = removeDescendantsByName(ast, 'group');
+    if (removedGroups > 0) {
+        stats.p64_groups = removedGroups;
+        log.push(`P64: Removed ${removedGroups} (group) node(s) — K5 has no object groups`);
+        warnings.push(`Removed ${removedGroups} object group(s) — KiCad 5 has no grouping concept (objects kept, ungrouped)`);
+    }
+
+    // P60: Remove all UUID identifiers (graphics/text/segments/etc. — K5 has none or
+    // regenerates 8-hex stamps). Footprint (path ...) UUIDs were truncated in the
+    // recursive pass; the (tstamp ...)/(uuid ...) nodes themselves go here.
+    stats.p60_tstamps += removeDescendantsByName(ast, 'tstamp');
+    stats.p60_tstamps += removeDescendantsByName(ast, 'uuid');
+
+    // Summary
+    log.push('--- K6→K5 PCB Summary ---');
+    log.push(`P50 Header downgraded: ${stats.p50_header ? 'Yes' : 'No'}`);
+    log.push(`P51 Layer definitions normalized: ${stats.p51_layers}`);
+    log.push(`P52 setup stackup removed: ${stats.p52_stackup}`);
+    log.push(`P53 footprints → modules: ${stats.p53_modules}`);
+    log.push(`P54 arcs converted to center+angle: ${stats.p54_arcs}`);
+    log.push(`P55 roundrect/custom pads → rect: ${stats.p55_pads}`);
+    log.push(`P56 zones downgraded: ${stats.p56_zones}`);
+    log.push(`P57 rectangles → line segments: ${stats.p57_rects}`);
+    log.push(`P58 track arcs → segments: ${stats.p58_track_arcs}`);
+    log.push(`P59 via attrs removed: ${stats.p59_via_attrs}`);
+    log.push(`P60 UUID identifiers removed: ${stats.p60_tstamps}`);
+    log.push(`P61 K6 dimensions dropped: ${stats.p61_dimensions}`);
+    log.push(`P62 model offset → at: ${stats.p62_model_offset}`);
+    log.push(`P63 graphic (fill) removed: ${stats.p63_graphic_fill}`);
+    log.push(`P64 object groups removed: ${stats.p64_groups}`);
+}
+
+const K5_PCB_GRAPHIC_RECTS = ['gr_rect', 'fp_rect'];
+
+// Every graphic-shape node type. KiCad 5's strict graphic parsers
+// (parseEDGE_MODULE for fp_*, parseDRAWSEGMENT for gr_*) accept only geometry +
+// layer/width/tstamp/status/angle on these — notably NOT (fill ...).
+const K5_PCB_GRAPHIC_SHAPES = new Set([
+    'gr_line', 'gr_arc', 'gr_circle', 'gr_poly', 'gr_curve', 'gr_rect',
+    'fp_line', 'fp_arc', 'fp_circle', 'fp_poly', 'fp_curve', 'fp_rect',
+]);
+
+/**
+ * True when a (dimension ...) node is in KiCad 6+ parametric form. K6 dimensions
+ * carry (type ...)/(pts ...)/(format ...)/(style ...) children and start with a
+ * list, whereas legacy K5 dimensions start with a bare numeric value and use
+ * explicit (feature1 ...)/(crossbar ...)/(arrow1a ...) geometry.
+ */
+function isK6Dimension(node) {
+    if (findChild(node, 'format') || findChild(node, 'style')
+        || findChild(node, 'type') || findChild(node, 'pts')) {
+        return true;
+    }
+    const first = node.children[0];
+    return !!(first && first.type === 'list');
+}
+
+function transformPcbK6toK5(node, stats, log, warnings) {
+    if (!node || node.type !== 'list') return;
+
+    // Unquote layer name tokens (KiCad 5 writes (layer F.Cu), not (layer "F.Cu")).
+    // Only unquote simple names so user layers containing spaces stay quoted.
+    if (node.name === 'layer' || node.name === 'layers') {
+        for (const c of node.children) {
+            if (c.type === 'string' && /^[^\s()"]+$/.test(c.value)) c.type = 'atom';
+        }
+    }
+
+    // P53: (footprint ...) → (module ...)
+    if (node.name === 'footprint') {
+        downgradeFootprintToModule(node, stats);
+    }
+
+    // P54: graphic arcs 3-point → center+angle
+    if (node.name === 'gr_arc' || node.name === 'fp_arc') {
+        if (downgradeArcMidToAngle(node)) stats.p54_arcs++;
+    }
+
+    // P55: pad shape/attribute downgrade
+    if (node.name === 'pad') {
+        if (downgradePadToLegacy(node)) stats.p55_pads++;
+    }
+
+    // P56: zone downgrade (may replace this node's parent list — handled by caller via splitting,
+    // so here we only clean a single-layer zone in place; multilayer split done in P56b below)
+    if (node.name === 'zone') {
+        if (cleanZoneForLegacy(node)) stats.p56_zones++;
+    }
+
+    // P57: gr_rect/fp_rect → 4 line segments (handled at the parent level so we can
+    // splice the replacement siblings in). Mark for replacement.
+    // P58: track (arc ...) → (segment ...)
+    // Both handled in the child-replacement loop below.
+
+    // P59: via attribute cleanup
+    if (node.name === 'via') {
+        for (const attr of ['free', 'remove_unused_layers', 'keep_end_layers', 'zone_layer_connections']) {
+            const removed = removeAllChildren(node, attr);
+            if (removed > 0) stats.p59_via_attrs += removed;
+        }
+    }
+
+    // P62: 3D model placement offset. KiCad 6 renamed the model node's
+    // (at (xyz ...)) to (offset (xyz ...)); KiCad 5's strict module parser only
+    // knows (at ...) and rejects (offset ...) with "Unknown token".
+    if (node.name === 'model') {
+        const offsetNode = findChild(node, 'offset');
+        if (offsetNode && !findChild(node, 'at')) {
+            offsetNode.name = 'at';
+            stats.p62_model_offset++;
+        }
+    }
+
+    // P63: Strip (fill ...) from graphic shapes. KiCad 5's parseEDGE_MODULE /
+    // parseDRAWSEGMENT throw "Expecting 'layer or width'" on a (fill ...) child;
+    // K6 emits it on filled shapes (fp_poly, fp_circle, gr_poly, gr_circle, ...).
+    // Zone fill is a separate node and is intentionally NOT touched here.
+    if (K5_PCB_GRAPHIC_SHAPES.has(node.name)) {
+        const removed = removeAllChildren(node, 'fill');
+        if (removed > 0) stats.p63_graphic_fill += removed;
+    }
+
+    // Child-level rewrites: rectangle→lines, track arc→segment, multilayer zone split,
+    // drop incompatible K6 dimensions.
+    const newChildren = [];
+    for (const child of node.children) {
+        // P61: KiCad 6 parametric dimensions ((type ...)/(pts ...)/(format ...)/(style ...))
+        // are structurally unparseable by KiCad 5 (which expects a leading numeric value
+        // and explicit feature1/feature2/crossbar/arrow geometry). Drop them (lossy).
+        if (child.type === 'list' && child.name === 'dimension' && isK6Dimension(child)) {
+            stats.p61_dimensions++;
+            warnings.push(`Dropped a KiCad 6 dimension — its parametric format is incompatible with KiCad 5 (annotation lost)`);
+            continue;
+        }
+        if (child.type === 'list' && K5_PCB_GRAPHIC_RECTS.includes(child.name)) {
+            const lines = rectToLines(child);
+            if (lines) {
+                newChildren.push(...lines);
+                stats.p57_rects++;
+                continue;
+            }
+        }
+        if (child.type === 'list' && child.name === 'arc') {
+            // Track arc (curved trace) — K5 has no arc track type.
+            const seg = trackArcToSegment(child);
+            if (seg) {
+                newChildren.push(seg);
+                stats.p58_track_arcs++;
+                warnings.push(`Approximated a curved track (arc) as a straight segment - KiCad 5 has no arc track type`);
+                continue;
+            }
+        }
+        if (child.type === 'list' && child.name === 'zone') {
+            const split = splitMultilayerZone(child);
+            if (split) {
+                newChildren.push(...split);
+                stats.p56_zones += split.length;
+                continue;
+            }
+        }
+        newChildren.push(child);
+    }
+    node.children = newChildren;
+
+    for (const child of node.children) {
+        transformPcbK6toK5(child, stats, log, warnings);
+    }
+}
+
+/** P53: rename a (footprint ...) node to a KiCad 5 (module ...) node and strip K6-only data. */
+function downgradeFootprintToModule(node, stats) {
+    node.name = 'module';
+    // Unquote the library:name ONLY when it has no characters that require quoting.
+    // KiCad 5 writes simple names bare but quotes names with spaces/parens, and
+    // accepts either on read. A name like lib:FOO(DC-10A) MUST stay quoted or K5
+    // reads "(DC-10A)" as a child token and errors ("Expecting locked, placed, …").
+    const nameNode = node.children[0];
+    if (nameNode && (nameNode.type === 'string' || nameNode.type === 'atom')) {
+        nameNode.type = /^[^\s()"]+$/.test(String(nameNode.value)) ? 'atom' : 'string';
+    }
+
+    // Map (attr ...) to the KiCad 5 form: K5 only knows bare (attr smd) / (attr virtual);
+    // through_hole is the default (no attr) and K6 sub-flags are dropped.
+    const attrNode = findChild(node, 'attr');
+    if (attrNode) {
+        const flags = attrNode.children.filter(c => c.type === 'atom').map(c => c.value);
+        removeChild(node, 'attr');
+        let k5attr = null;
+        if (flags.includes('smd')) k5attr = 'smd';
+        else if (flags.includes('virtual') || flags.includes('board_only')) k5attr = 'virtual';
+        if (k5attr) {
+            // Insert (attr X) after tedit/tstamp area (K5 places it on the module body)
+            node.children.push({ type: 'list', name: 'attr', children: [{ type: 'atom', value: k5attr }] });
+        }
+    }
+
+    // Drop K6-only footprint children that K5 cannot parse.
+    for (const name of ['property', 'group', 'net_tie_pad_groups']) {
+        removeAllChildren(node, name);
+    }
+
+    // P60 (paths): truncate (path "/uuid/uuid") segments to legacy 8-hex.
+    const pathNode = findChild(node, 'path');
+    if (pathNode && pathNode.children.length > 0 && pathNode.children[0].value) {
+        pathNode.children[0].value = '/' + String(pathNode.children[0].value)
+            .split('/').filter(Boolean)
+            .map(seg => seg.replace(/-/g, '').slice(-8))
+            .join('/');
+        pathNode.children[0].type = 'atom';
+    }
+
+    stats.p53_modules++;
+}
+
+/**
+ * P54: convert a 3-point arc (start/mid/end on the arc) into the KiCad 5 legacy
+ * form (start = circle center) (end = arc start point) (angle = swept degrees).
+ * Returns true when converted, false when the node was not in 3-point form.
+ */
+export function downgradeArcMidToAngle(node) {
+    const startN = findChild(node, 'start');
+    const midN = findChild(node, 'mid');
+    const endN = findChild(node, 'end');
+    if (!startN || !midN || !endN) return false;
+    const p = (n) => ({ x: parseFloat(n.children[0]?.value), y: parseFloat(n.children[1]?.value) });
+    const start = p(startN), mid = p(midN), end = p(endN);
+    if ([start.x, start.y, mid.x, mid.y, end.x, end.y].some(v => !isFinite(v))) return false;
+
+    const res = arcCenterAngle(start, mid, end);
+    if (!res) return false; // collinear — leave as-is
+
+    // Rewrite: start → center, end → original start point, drop mid, add angle.
+    startN.children = [mkAtom(fmtNum(res.center.x)), mkAtom(fmtNum(res.center.y))];
+    endN.children = [mkAtom(fmtNum(start.x)), mkAtom(fmtNum(start.y))];
+    removeChild(node, 'mid');
+    // Insert (angle ...) right after end if not present
+    if (!findChild(node, 'angle')) {
+        const endIdx = node.children.findIndex(c => c.type === 'list' && c.name === 'end');
+        const angleNode = { type: 'list', name: 'angle', children: [mkAtom(fmtNum(res.angle))] };
+        node.children.splice(endIdx >= 0 ? endIdx + 1 : node.children.length, 0, angleNode);
+    }
+    return true;
+}
+
+/** P55: collapse roundrect/custom pads to rect and strip K6-only pad attributes. Returns changed. */
+export function downgradePadToLegacy(node) {
+    // children layout: [ "num", typeAtom, shapeAtom, (locked?), (at..), ... ]
+    let changed = false;
+    const shapeAtom = node.children.find((c, i) => c.type === 'atom' && i <= 3 &&
+        ['circle', 'rect', 'oval', 'trapezoid', 'roundrect', 'custom'].includes(c.value));
+    if (shapeAtom && (shapeAtom.value === 'roundrect' || shapeAtom.value === 'custom')) {
+        shapeAtom.value = 'rect';
+        changed = true;
+    }
+    // Remove the bare 'locked' token (K5 pads have no locked attribute)
+    const lockedIdx = node.children.findIndex((c, i) => i <= 4 && c.type === 'atom' && c.value === 'locked');
+    if (lockedIdx >= 0) { node.children.splice(lockedIdx, 1); changed = true; }
+
+    for (const attr of ['roundrect_rratio', 'chamfer', 'chamfer_ratio', 'options', 'primitives',
+        'pinfunction', 'pintype', 'zone_layer_connections', 'remove_unused_layers',
+        'keep_end_layers', 'thermal_bridge_angle', 'property']) {
+        if (removeAllChildren(node, attr) > 0) changed = true;
+    }
+    return changed;
+}
+
+/** P56: clean a single zone node in place for KiCad 5 (does not split layers). Returns changed. */
+function cleanZoneForLegacy(node) {
+    let changed = false;
+    for (const attr of ['filled_areas_thickness', 'name', 'attr', 'thermal_bridge_angle']) {
+        if (removeAllChildren(node, attr) > 0) changed = true;
+    }
+    // filled_polygon: K5 has no (layer ...) child and no (island ...) marker
+    for (const fp of findChildren(node, 'filled_polygon')) {
+        if (removeAllChildren(fp, 'layer') > 0) changed = true;
+        if (removeAllChildren(fp, 'island') > 0) changed = true;
+    }
+    // fill: drop K6-only island controls
+    const fillNode = findChild(node, 'fill');
+    if (fillNode) {
+        for (const attr of ['island_removal_mode', 'island_area_min']) {
+            if (removeAllChildren(fillNode, attr) > 0) changed = true;
+        }
+    }
+    return changed;
+}
+
+/**
+ * P56b: split a multilayer zone (one with a (layers ...) child or a keepout) into
+ * KiCad-5-compatible single-layer zones. Returns an array of replacement zone
+ * node(s), or null when no split/removal is needed (caller keeps the original).
+ */
+function splitMultilayerZone(zoneNode) {
+    // Drop keepout zones entirely — KiCad 5's keepout model is incompatible.
+    if (findChild(zoneNode, 'keepout')) {
+        return []; // remove
+    }
+    const layersNode = findChild(zoneNode, 'layers');
+    if (!layersNode) return null; // single (layer ...) zone — no split needed
+    const layerVals = layersNode.children.filter(c => c.type === 'atom' || c.type === 'string').map(c => c.value);
+    if (layerVals.length === 0) return null;
+
+    const result = [];
+    for (const lv of layerVals) {
+        const clone = deepCloneNode(zoneNode);
+        removeChild(clone, 'layers');
+        // Insert a single (layer <name>) where (layers ...) was
+        clone.children.unshift({ type: 'list', name: 'layer', children: [mkAtom(lv)] });
+        result.push(clone);
+    }
+    return result;
+}
+
+/** P57: turn a gr_rect/fp_rect into four matching line segments (K5 has no rect primitive). */
+export function rectToLines(node) {
+    const startN = findChild(node, 'start');
+    const endN = findChild(node, 'end');
+    if (!startN || !endN) return null;
+    const x1 = parseFloat(startN.children[0]?.value), y1 = parseFloat(startN.children[1]?.value);
+    const x2 = parseFloat(endN.children[0]?.value), y2 = parseFloat(endN.children[1]?.value);
+    if ([x1, y1, x2, y2].some(v => !isFinite(v))) return null;
+
+    const isFp = node.name === 'fp_rect';
+    const lineName = isFp ? 'fp_line' : 'gr_line';
+    const layerNode = findChild(node, 'layer');
+    // strokeWidthNode() returns a numeric *string* (from either (stroke (width W))
+    // or a direct (width W)). NOTE: do not use findChild(node,'width') here — that
+    // returns the node object, which mkAtom() would stringify to "[object Object]".
+    const widthValue = strokeWidthNode(node);
+    const corners = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]];
+    const lines = [];
+    for (let i = 0; i < 4; i++) {
+        const a = corners[i], b = corners[(i + 1) % 4];
+        const children = [
+            { type: 'list', name: 'start', children: [mkAtom(fmtNum(a[0])), mkAtom(fmtNum(a[1]))] },
+            { type: 'list', name: 'end', children: [mkAtom(fmtNum(b[0])), mkAtom(fmtNum(b[1]))] },
+        ];
+        if (layerNode) children.push(deepCloneNode(layerNode));
+        if (widthValue) children.push({ type: 'list', name: 'width', children: [mkAtom(widthValue)] });
+        lines.push({ type: 'list', name: lineName, children });
+    }
+    return lines;
+}
+
+/** Extract a width value (mm) from a node's (stroke (width W) ...) or (width W); returns string or null. */
+function strokeWidthNode(node) {
+    const stroke = findChild(node, 'stroke');
+    if (stroke) {
+        const w = findChild(stroke, 'width');
+        if (w && w.children.length > 0) return String(w.children[0].value);
+    }
+    const w = findChild(node, 'width');
+    if (w && w.children.length > 0) return String(w.children[0].value);
+    return null;
+}
+
+/** P58: approximate a curved track (arc ...) as a single straight (segment ...). Lossy. */
+function trackArcToSegment(node) {
+    const startN = findChild(node, 'start');
+    const endN = findChild(node, 'end');
+    if (!startN || !endN) return null;
+    const children = [
+        deepCloneNode(startN),
+        deepCloneNode(endN),
+    ];
+    for (const name of ['width', 'layer', 'net']) {
+        const n = findChild(node, name);
+        if (n) children.push(deepCloneNode(n));
+    }
+    return { type: 'list', name: 'segment', children };
+}
+
+// --- small geometry / node helpers (PCB K6→K5) ---
+
+export function mkAtom(value) {
+    return { type: 'atom', value: String(value) };
+}
+
+export function fmtNum(n) {
+    if (!isFinite(n)) return '0';
+    let s = n.toFixed(6).replace(/0+$/, '').replace(/\.$/, '');
+    return s === '-0' ? '0' : s;
+}
+
+export function deepCloneNode(node) {
+    if (node.type !== 'list') return { type: node.type, value: node.value };
+    return { type: 'list', name: node.name, children: node.children.map(deepCloneNode) };
+}
+
+/** Circumcenter of three points, or null when (near-)collinear. */
+function circumcenter(a, b, c) {
+    const d = 2 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
+    if (Math.abs(d) < 1e-9) return null;
+    const a2 = a.x * a.x + a.y * a.y, b2 = b.x * b.x + b.y * b.y, c2 = c.x * c.x + c.y * c.y;
+    return {
+        x: (a2 * (b.y - c.y) + b2 * (c.y - a.y) + c2 * (a.y - b.y)) / d,
+        y: (a2 * (c.x - b.x) + b2 * (a.x - c.x) + c2 * (b.x - a.x)) / d,
+    };
+}
+
+/**
+ * Given three points on an arc (start, mid, end), return { center, angle } where
+ * angle is the signed swept degrees from start→end (the direction passing through
+ * mid). Matches KiCad's internal atan2-based arc-angle computation (Y-down), so
+ * the legacy form is (start=center)(end=arc-start-point)(angle). Null if collinear.
+ */
+function arcCenterAngle(start, mid, end) {
+    const c = circumcenter(start, mid, end);
+    if (!c) return null;
+    const deg = (pt) => Math.atan2(pt.y - c.y, pt.x - c.x) * 180 / Math.PI;
+    const norm360 = (x) => { x %= 360; if (x < 0) x += 360; return x; };
+    const a1 = deg(start), am = deg(mid), a3 = deg(end);
+    const d13 = norm360(a3 - a1);
+    const d1m = norm360(am - a1);
+    const angle = (d1m <= d13) ? d13 : d13 - 360;
+    return { center: c, angle };
 }

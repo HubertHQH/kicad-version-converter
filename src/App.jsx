@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef } from 'react'
-import { convertKicad, detectVersion } from './lib/converter'
+import { convertKicad, detectVersion, detectSchematicRoot, mergeCacheLibs } from './lib/converter'
 import './App.css'
 
 function App() {
@@ -15,6 +15,7 @@ function App() {
     { key: 'KICAD8', label: 'KiCad 8', version: '20231120' },
     { key: 'KICAD7', label: 'KiCad 7', version: '20230121' },
     { key: 'KICAD6', label: 'KiCad 6', version: '20211123' },
+    { key: 'KICAD5', label: 'KiCad 5', version: '20171130' },
   ]
 
   const handleFiles = useCallback(async (fileList) => {
@@ -53,11 +54,13 @@ function App() {
     const hasKicad10 = parsed.some(f => f.isKicad10)
     const hasKicad9 = parsed.some(f => f.isKicad9)
     const hasKicad8 = parsed.some(f => f.isKicad8)
+    const hasKicad7 = parsed.some(f => f.isKicad7)
     setTargetVersion(
       hasKicad10 ? 'KICAD9'
         : hasKicad9 ? 'KICAD8'
           : hasKicad8 ? 'KICAD7'
-            : 'KICAD6'
+            : hasKicad7 ? 'KICAD6'
+              : 'KICAD5'
     )
 
     setFiles(parsed)
@@ -86,30 +89,58 @@ function App() {
 
     const allLogs = []
     const allWarnings = []
-    const convertedFiles = []
+    let convertedFiles = []
 
     const updatedFiles = [...files]
     const target = targetOptions.find(t => t.key === targetVersion)
+
+    // When targeting KiCad 5, a hierarchical schematic project shares ONE symbol
+    // cache named after its root sheet. Detect the root so every sheet points at
+    // (and contributes to) the same `<root>-cache.lib`.
+    const cacheRoot = targetVersion === 'KICAD5'
+      ? detectSchematicRoot(files.map(f => ({ name: f.name, content: f.content })))
+      : null
 
     for (let i = 0; i < updatedFiles.length; i++) {
       const f = updatedFiles[i]
       allLogs.push(`\n━━━ Converting: ${f.name} → ${target.label} ━━━`)
 
       try {
-        const result = await convertKicad(f.content, targetVersion)
+        const result = await convertKicad(f.content, targetVersion, f.name, cacheRoot ? { cacheBaseName: cacheRoot } : {})
         updatedFiles[i] = { ...f, status: 'success', result }
 
         allLogs.push(...result.log)
         allWarnings.push(...result.warnings.map(w => `[${f.name}] ${w}`))
 
-        convertedFiles.push({
-          name: f.name,
-          content: result.output,
-        })
+        // A single input may produce multiple legacy outputs (e.g. KiCad 5
+        // symbol → .lib + .dcm, or schematic → .sch + -cache.lib).
+        const outs = result.outputFiles || [{ name: f.name, content: result.output }]
+        for (const out of outs) convertedFiles.push(out)
       } catch (err) {
         updatedFiles[i] = { ...f, status: 'error', error: err.message }
         allLogs.push(`ERROR: ${err.message}`)
         allWarnings.push(`[${f.name}] Conversion failed: ${err.message}`)
+      }
+    }
+
+    // Merge the per-sheet caches into one deduplicated `<root>-cache.lib`.
+    if (cacheRoot) {
+      const cacheName = `${cacheRoot}-cache.lib`
+      const dcmName = `${cacheRoot}-cache.dcm`
+      const parts = convertedFiles.filter(f => f.name === cacheName).map(f => f.content)
+      if (parts.length > 0) {
+        const merged = mergeCacheLibs(parts)
+        convertedFiles = convertedFiles.filter(f => f.name !== cacheName && f.name !== dcmName)
+        convertedFiles.push({ name: cacheName, content: merged })
+        // Point each schematic's own download set at the merged cache too.
+        for (const uf of updatedFiles) {
+          if (uf.result && Array.isArray(uf.result.outputFiles) && uf.result.outputFiles.some(o => o.name === cacheName)) {
+            uf.result.outputFiles = uf.result.outputFiles
+              .filter(o => o.name !== cacheName && o.name !== dcmName)
+              .concat([{ name: cacheName, content: merged }])
+          }
+        }
+        allLogs.push(`\n─── Consolidated ${parts.length} sheet cache(s) → ${cacheName} ───`)
       }
     }
 
@@ -119,7 +150,7 @@ function App() {
       warnings: allWarnings,
       convertedFiles,
       fileCount: files.length,
-      successCount: convertedFiles.length,
+      successCount: updatedFiles.filter(f => f.status === 'success').length,
       targetLabel: target.label,
     })
     setConverting(false)
@@ -174,9 +205,9 @@ function App() {
         </div>
         <p className="app-subtitle">Convert KiCad schematics, symbol libraries, PCBs &amp; footprints between versions</p>
         <div className="version-badges">
-          <span className="version-badge from">KiCad 10 / 9 / 8 / 7</span>
+          <span className="version-badge from">KiCad 10 / 9 / 8 / 7 / 6</span>
           <span className="version-arrow">→</span>
-          <span className="version-badge to">KiCad 9 / 8 / 7 / 6</span>
+          <span className="version-badge to">KiCad 9 / 8 / 7 / 6 / 5</span>
         </div>
       </header>
 
@@ -338,7 +369,7 @@ function App() {
                     <button
                       className="btn btn-ghost"
                       style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem' }}
-                      onClick={() => downloadFile(f.name, f.result.output)}
+                      onClick={() => (f.result.outputFiles || [{ name: f.name, content: f.result.output }]).forEach(out => downloadFile(out.name, out.content))}
                     >
                       ⬇
                     </button>
@@ -379,7 +410,7 @@ function App() {
 
       {/* Footer */}
       <footer className="app-footer">
-        <div><a href="https://www.nextpcb.com" target="_blank" rel="noopener">NextPCB</a> KiCad Version Converter • Supports .kicad_sch, .kicad_sym, .kicad_pcb &amp; .kicad_mod • Lossy conversion — version-specific features will be removed</div>
+        <div><a href="https://www.nextpcb.com" target="_blank" rel="noopener">NextPCB</a> KiCad Version Converter • Supports .kicad_sch, .kicad_sym, .kicad_pcb &amp; .kicad_mod • KiCad 5 output uses the legacy .sch and .lib/.dcm formats • Lossy conversion — version-specific features will be removed</div>
         <div className="footer-support">Bug Report: <a href="mailto:huqinghan@huaqiu.com">huqinghan@huaqiu.com</a></div>
       </footer>
     </div>
