@@ -2,6 +2,7 @@
 
 A browser-based tool for downgrading KiCad schematic files (`.kicad_sch`), symbol library files (`.kicad_sym`), PCB files (`.kicad_pcb`), and footprint files (`.kicad_mod`) across versions. Supported conversion paths:
 
+- **KiCad 10.99 → KiCad 10** — schematics & PCBs only; 10.99 is the development/nightly line (future KiCad 11) and its format is still changing
 - **KiCad 10 → KiCad 9** (schematics / symbol libraries / PCBs / footprints)
 - **KiCad 9 → KiCad 8**
 - **KiCad 8 → KiCad 7**
@@ -16,12 +17,40 @@ You can try it here: https://www.nextpcb.com/kicad-version-converter
 - **Client-side conversion**: Purely front-end implementation — no server required, files are never uploaded anywhere
 - **Four file types**: Supports `.kicad_sch` (schematics), `.kicad_sym` (symbol libraries), `.kicad_pcb` (PCBs), and `.kicad_mod` (footprints)
 - **Batch processing**: Upload multiple files at once, convert and download as a bundle
-- **Auto-detection**: Automatically detects file type and version (KiCad 6/7/8/9/10) and applies the appropriate conversion rules
+- **Auto-detection**: Automatically detects file type and version (KiCad 6/7/8/9/10/10.99) and applies the appropriate conversion rules
+- **KiCad 10.99 awareness**: Nightly/development 10.99 schematics and PCBs are detected (by version stamp above stable KiCad 10, or `generator_version "10.99"`) and flagged with a prominent notice that the pre-release format is still changing — convert to KiCad 10 and re-verify before use
 - **Legacy KiCad 5 output**: KiCad 6 schematics/symbol libraries are emitted in the legacy Eeschema `.sch` and `.lib`/`.dcm` formats; a single input may produce multiple files (e.g. `.sch` + `-cache.lib`)
 - **Chained downgrade**: e.g. KiCad 10 → KiCad 5 automatically performs five-step conversion (10→9→8→7→6→5)
 - **Conversion log**: Displays detailed conversion logs and warning messages
 
 ## Conversion Rules
+
+### KiCad 10.99 → KiCad 10 (development/nightly → stable)
+
+> 🧪 **KiCad 10.99 is a pre-release/nightly line** (the future KiCad 11). Its file format is still changing, so this path is best-effort and tracks the nightly as it evolves. When a 10.99 file is detected the app shows a prominent notice; always re-open the converted files in KiCad 10 to verify. **Schematics and PCBs only** — 10.99 symbols/footprints are out of scope for now. Detection accepts either a version stamp above stable KiCad 10's or `generator_version "10.99"`.
+
+#### Schematic (.kicad_sch) — D1-D4
+
+| Rule | Description |
+|------|-------------|
+| D1 | Header → KiCad 10 (`version` → `20260306`, `generator_version` → `10.0`) |
+| D2 | Remove native `(ellipse …)` / `(ellipse_arc …)` primitives (10.99 schematic feature) |
+| D3 | Remove `(net_chain …)` / `(net_chains …)` (10.99 schematic feature) |
+| D4 | Remove `(locked …)` fields (introduced in the 10.99 schematic format) |
+
+#### PCB (.kicad_pcb) — DP1-DP7
+
+| Rule | Description |
+|------|-------------|
+| DP1 | Header → KiCad 10 (`version` → `20260206`, `generator_version` → `10.0`) |
+| DP2 | Remove 10.99-only board objects/fields: `extruded`, `gr_ellipse`/`fp_ellipse`(`_arc`), `spec_frequency`/`dielectric_model`, `net_chain`/`net_chains`, `thieving` (lossy) |
+| DP3 | Remove `(model … (type …))` typed/extruded 3D body blocks (plain file-path models are kept) |
+| DP4 | Copper thieving zone fill `(mode thieving)` → `(mode polygon)` |
+| DP5 | Remove `(knockout …)` from `table_cell` |
+| DP6 | Remove `(sim_electrical_type …)` from `pad` |
+| DP7 | **Footprint placement** `(transform (translate X Y) (rotate A) (scale SX SY))` → `(at X Y A)` — KiCad 10.99 replaced `(at …)` with a `transform` block; KiCad 10 has no `transform` token, so an un-converted board fails to load. 3D-model `(scale (xyz …))` / `(rotate (xyz …))` are left untouched; a non-unit scale is dropped with a warning (KiCad 10 cannot scale placed objects) |
+
+> ⚠️ **Not yet validated against a running KiCad 10** (no public build available to round-trip through). DP1-DP6 follow the AskStr/kicad-backport reference rule set; **DP7 was found from a real 10.99 board failing to load** and is verified byte-for-byte against KiCad's own KiCad 10 demo (the same footprint stored as `(at 110.49 78.867 180)`). The reference's user-layer remap is deliberately **not** applied here — it targets KiCad 5's fixed layer set and would drop the `User.1`–`User.9` / layer display-name fields that KiCad 10 fully supports.
 
 ### Schematic (.kicad_sch) — KiCad 10 → KiCad 9 (N1-N10)
 
@@ -322,7 +351,7 @@ npm run build
 
 - **React** + **Vite** — Front-end framework and build tool
 - **S-expression Parser** — Custom KiCad S-expression parser (`src/lib/sexpr-parser.js`)
-- **Converter** — AST-based version conversion engine (`src/lib/converter.js` + `src/lib/sym-converter.js` + `src/lib/pcb-converter.js` + `src/lib/fp-converter.js`), supporting KiCad 10/9/8/7/6 chained downgrade
+- **Converter** — AST-based version conversion engine (`src/lib/converter.js` + `src/lib/sym-converter.js` + `src/lib/pcb-converter.js` + `src/lib/fp-converter.js`), supporting KiCad 10.99/10/9/8/7/6 chained downgrade
 - **Legacy writers** — KiCad 5 cross-family text emitters: `src/lib/sch-legacy-writer.js` (`.kicad_sch` → `.sch` + cache) and `src/lib/sym-legacy-writer.js` (`.kicad_sym` → `.lib`/`.dcm`)
 
 ## Project Structure
@@ -340,7 +369,8 @@ converter/
 │   │   └── sym-legacy-writer.js  # KiCad 6 → KiCad 5 legacy .lib/.dcm writer
 │   ├── App.jsx                   # Main application component (file upload, conversion, download)
 │   └── main.jsx                  # Entry point
-├── scripts/                     # KiCad 6 → KiCad 5 verification harnesses (run with `node scripts/<file>`)
+├── scripts/                     # Verification harnesses (run with `node scripts/<file>`)
+│   ├── test-k1099-k10.mjs       # self-contained: KiCad 10.99 → 10 schematic + PCB rules (D1-D4, DP1-DP7) + detection
 │   ├── test-k6k5.mjs            # end-to-end: all 4 file types convert, re-parse, right stamps, value-level checks
 │   ├── test-k5-pcb-synth.mjs    # self-contained (no asset deps): one synthetic K6 board exercising every K5 PCB rule (P50-P64)
 │   ├── check-k5-header.mjs      # emulates KiCad 5 PCB_PARSER::parseHeader (catches the (host …) issue)
@@ -379,7 +409,7 @@ projects**:
 Run all harnesses:
 
 ```bash
-for t in test-k6k5 test-k5-pcb-synth check-k5-header test-cache-match test-consolidate test-orient test-arc-roundtrip test-label-orient; do node scripts/$t.mjs; done
+for t in test-k1099-k10 test-k6k5 test-k5-pcb-synth check-k5-header test-cache-match test-consolidate test-orient test-arc-roundtrip test-label-orient; do node scripts/$t.mjs; done
 ```
 
 > Still best-effort (no KiCad-5 ground truth available): hierarchical **sheet-pin** side
