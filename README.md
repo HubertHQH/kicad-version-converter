@@ -1,35 +1,87 @@
 # KiCad Multi-Version Converter
 
-A browser-based tool for downgrading KiCad schematic files (`.kicad_sch`), symbol library files (`.kicad_sym`), PCB files (`.kicad_pcb`), and footprint files (`.kicad_mod`) across versions. Supported conversion paths:
+A browser-based tool for **downgrading** KiCad files across versions — schematics (`.kicad_sch`), symbol libraries (`.kicad_sym`), PCBs (`.kicad_pcb`), and footprints (`.kicad_mod`). KiCad only guarantees backward compatibility (a newer KiCad opens older files), never forward compatibility, and there is no official downgrade path — this tool fills that gap by rewriting the file format one major version at a time.
 
-- **KiCad 10.99 → KiCad 10** — schematics & PCBs only; 10.99 is the development/nightly line (future KiCad 11) and its format is still changing
-- **KiCad 10 → KiCad 9** (schematics / symbol libraries / PCBs / footprints)
-- **KiCad 9 → KiCad 8**
-- **KiCad 8 → KiCad 7**
-- **KiCad 7 → KiCad 6**
-- **KiCad 6 → KiCad 5** — PCBs/footprints stay S-expression (`.kicad_pcb` / `.kicad_mod`, `(footprint)` → `(module)`); schematics and symbol libraries cross the KiCad 5/6 file-family boundary and are written as **legacy text formats**: `.kicad_sch` → `.sch` (+ a `-cache.lib`), `.kicad_sym` → `.lib` (+ `.dcm`)
-- **Chained downgrades**, e.g. KiCad 10 → KiCad 5 (10→9→8→7→6→5), KiCad 9 → KiCad 7, KiCad 8 → KiCad 6, etc.
+▶ **Try it online: https://www.nextpcb.com/kicad-version-converter**
 
-You can try it here: https://www.nextpcb.com/kicad-version-converter
+## Contents
+
+- [Supported Conversions](#supported-conversions)
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [Conversion Rules](#conversion-rules) — [10.99→10](#kicad-1099--kicad-10-nightly--stable) · [Schematic](#schematic-kicad_sch) · [Symbol Library](#symbol-library-kicad_sym) · [PCB](#pcb-kicad_pcb) · [Footprint](#footprint-kicad_mod)
+- [Verification](#verification)
+- [Tech Stack](#tech-stack)
+- [Project Structure](#project-structure)
+- [Credits](#credits)
+
+## Supported Conversions
+
+Conversion happens **one major version at a time**, and steps are **chained automatically**. Pick any lower target and the tool walks the file down through each intermediate version — e.g. KiCad 10 → KiCad 5 runs `10→9→8→7→6→5`.
+
+| File type | 10.99→10 | 10→9 | 9→8 | 8→7 | 7→6 | 6→5 |
+|-----------|:--------:|:----:|:---:|:---:|:---:|:---:|
+| **Schematic** `.kicad_sch` | ✅ D1–D4 | ✅ N1–N10 | ✅ R1–R8 | ✅ R10–R15 | ✅ R20–R30 | ✅ → legacy `.sch` + `-cache.lib` |
+| **Symbol library** `.kicad_sym` | — | ✅ NS1–NS8 | ✅ S1–S4 | ✅ S10–S14 | ✅ S20–S23 | ✅ → legacy `.lib` + `.dcm` |
+| **PCB** `.kicad_pcb` | ✅ DP1–DP7 | ✅ NP1–NP11 | ✅ P1–P9, P21–P23, P27 | ✅ P10–P28 | ✅ P40–P49 | ✅ P50–P64 |
+| **Footprint** `.kicad_mod` | — | ✅ NF1–NF2 | ✅ F1–F4 | ✅ F10–F18 | ✅ F20–F26 | ✅ F30–F38 |
+
+Two boundaries are special:
+
+- **KiCad 10.99 → 10** — 10.99 is the development/nightly line (the future KiCad 11) and its format is still changing, so this path is **schematics & PCBs only** and best-effort. Detected files trigger a prominent in-app notice.
+- **KiCad 6 → 5** — this crosses KiCad's S-expression / legacy file-family boundary. PCBs and footprints stay S-expression (`(footprint)` → `(module)`), but schematics and symbol libraries are rewritten as **legacy text formats**: `.kicad_sch` → `.sch` (+ a `-cache.lib`), `.kicad_sym` → `.lib` (+ `.dcm`).
+
+### Version stamps per target
+
+Each downgrade rewrites the header `(version …)` (`YYYYMMDD`) and `generator_version`:
+
+| Target | Schematic | Symbol | PCB | Footprint |
+|--------|-----------|--------|-----|-----------|
+| KiCad 10 | `20260306` | `20251024` | `20260206` | `20260206` |
+| KiCad 9 | `20250114` | `20241209` | `20241229` | `20241229` |
+| KiCad 8 | `20231120` | `20231120` | `20240108` | `20240108` |
+| KiCad 7 | `20230121` | `20220914` | `20221018` | `20221018` |
+| KiCad 6 | `20211123` | `20211014` | `20211014` | `20211014` |
+| KiCad 5 | legacy `.sch` v4 | legacy `.lib` 2.4 | `20171130` | legacy `(module)` |
 
 ## Features
 
-- **Client-side conversion**: Purely front-end implementation — no server required, files are never uploaded anywhere
-- **Four file types**: Supports `.kicad_sch` (schematics), `.kicad_sym` (symbol libraries), `.kicad_pcb` (PCBs), and `.kicad_mod` (footprints)
-- **Batch processing**: Upload multiple files at once, convert and download as a bundle
-- **Auto-detection**: Automatically detects file type and version (KiCad 6/7/8/9/10/10.99) and applies the appropriate conversion rules
-- **KiCad 10.99 awareness**: Nightly/development 10.99 schematics and PCBs are detected (by version stamp above stable KiCad 10, or `generator_version "10.99"`) and flagged with a prominent notice that the pre-release format is still changing — convert to KiCad 10 and re-verify before use
-- **Legacy KiCad 5 output**: KiCad 6 schematics/symbol libraries are emitted in the legacy Eeschema `.sch` and `.lib`/`.dcm` formats; a single input may produce multiple files (e.g. `.sch` + `-cache.lib`)
-- **Chained downgrade**: e.g. KiCad 10 → KiCad 5 automatically performs five-step conversion (10→9→8→7→6→5)
-- **Conversion log**: Displays detailed conversion logs and warning messages
+- **Client-side only** — purely front-end; files are parsed and converted in the browser and never uploaded anywhere.
+- **Four file types** — `.kicad_sch`, `.kicad_sym`, `.kicad_pcb`, `.kicad_mod`.
+- **Auto-detection** — detects file type and version (KiCad 6/7/8/9/10/10.99) and applies the right rules; the target defaults to one major version below the highest file detected.
+- **Batch processing** — upload many files at once, convert, and download as a bundle.
+- **Chained downgrade** — any multi-step path (e.g. KiCad 10 → KiCad 5) is performed automatically.
+- **KiCad 10.99 awareness** — nightly schematics/PCBs are detected (version stamp above stable KiCad 10, or `generator_version "10.99"`) and flagged with a notice that the pre-release format is still changing.
+- **Legacy KiCad 5 output** — KiCad 6 schematics/symbol libraries are emitted in the legacy `.sch` and `.lib`/`.dcm` formats; a single input may produce multiple files (e.g. `.sch` + `-cache.lib`).
+- **Conversion log** — detailed per-rule logs plus warnings for every lossy step.
+
+## Quick Start
+
+```bash
+# Install dependencies
+npm install
+
+# Start development server
+npm run dev
+
+# Build for production
+npm run build
+```
+
+Then open the dev server URL, drop in your KiCad files, choose a target version, and download the converted output.
 
 ## Conversion Rules
 
-### KiCad 10.99 → KiCad 10 (development/nightly → stable)
+Every path is **lossy by design**: features a target version doesn't understand are removed or rewritten to the nearest equivalent, and a warning is logged for each one. The goal is to preserve all core circuit information (connectivity, components, values, positions) while safely dropping or downgrading newer format features. **Always re-open the converted files in the target KiCad to verify them.**
+
+The rule tables below are grouped by file type, newest step first. Click a step to expand its rules.
+
+### KiCad 10.99 → KiCad 10 (nightly → stable)
 
 > 🧪 **KiCad 10.99 is a pre-release/nightly line** (the future KiCad 11). Its file format is still changing, so this path is best-effort and tracks the nightly as it evolves. When a 10.99 file is detected the app shows a prominent notice; always re-open the converted files in KiCad 10 to verify. **Schematics and PCBs only** — 10.99 symbols/footprints are out of scope for now. Detection accepts either a version stamp above stable KiCad 10's or `generator_version "10.99"`.
 
-#### Schematic (.kicad_sch) — D1-D4
+<details>
+<summary><b>Schematic (.kicad_sch)</b> — D1–D4</summary>
 
 | Rule | Description |
 |------|-------------|
@@ -38,7 +90,10 @@ You can try it here: https://www.nextpcb.com/kicad-version-converter
 | D3 | Remove `(net_chain …)` / `(net_chains …)` (10.99 schematic feature) |
 | D4 | Remove `(locked …)` fields (introduced in the 10.99 schematic format) |
 
-#### PCB (.kicad_pcb) — DP1-DP7
+</details>
+
+<details>
+<summary><b>PCB (.kicad_pcb)</b> — DP1–DP7</summary>
 
 | Rule | Description |
 |------|-------------|
@@ -50,9 +105,16 @@ You can try it here: https://www.nextpcb.com/kicad-version-converter
 | DP6 | Remove `(sim_electrical_type …)` from `pad` |
 | DP7 | **Footprint placement** `(transform (translate X Y) (rotate A) (scale SX SY))` → `(at X Y A)` — KiCad 10.99 replaced `(at …)` with a `transform` block; KiCad 10 has no `transform` token, so an un-converted board fails to load. 3D-model `(scale (xyz …))` / `(rotate (xyz …))` are left untouched; a non-unit scale is dropped with a warning (KiCad 10 cannot scale placed objects) |
 
-> ⚠️ **Not yet validated against a running KiCad 10** (no public build available to round-trip through). DP1-DP6 follow the AskStr/kicad-backport reference rule set; **DP7 was found from a real 10.99 board failing to load** and is verified byte-for-byte against KiCad's own KiCad 10 demo (the same footprint stored as `(at 110.49 78.867 180)`). The reference's user-layer remap is deliberately **not** applied here — it targets KiCad 5's fixed layer set and would drop the `User.1`–`User.9` / layer display-name fields that KiCad 10 fully supports.
+</details>
 
-### Schematic (.kicad_sch) — KiCad 10 → KiCad 9 (N1-N10)
+> ⚠️ **Not yet validated against a running KiCad 10** (no public build available to round-trip through). DP1–DP6 follow the AskStr/kicad-backport reference rule set; **DP7 was found from a real 10.99 board failing to load** and is verified byte-for-byte against KiCad's own KiCad 10 demo (the same footprint stored as `(at 110.49 78.867 180)`). The reference's user-layer remap is deliberately **not** applied here — it targets KiCad 5's fixed layer set and would drop the `User.1`–`User.9` / layer display-name fields that KiCad 10 fully supports.
+
+### Schematic (`.kicad_sch`)
+
+> *(KiCad 10.99 → 10 is covered [above](#kicad-1099--kicad-10-nightly--stable).)*
+
+<details>
+<summary><b>KiCad 10 → 9</b> — N1–N10</summary>
 
 | Rule | Description |
 |------|-------------|
@@ -67,9 +129,10 @@ You can try it here: https://www.nextpcb.com/kicad-version-converter
 | N9 | Remove `(variant ...)` from `(path ...)` (K10 variant feature; not supported in K9) |
 | N10 | Remove top-level `(group ...)` (K10 schematic grouping feature; not supported in K9) |
 
-> ⚠️ **Hierarchical sheets note**: Projects with sub-sheet references must have all `.kicad_sch` files uploaded and converted together. Otherwise, KiCad will report version errors when opening sub-sheets.
+</details>
 
-### Schematic (.kicad_sch) — KiCad 9 → KiCad 8 (R1-R8)
+<details>
+<summary><b>KiCad 9 → 8</b> — R1–R8</summary>
 
 | Rule | Description |
 |------|-------------|
@@ -82,7 +145,10 @@ You can try it here: https://www.nextpcb.com/kicad-version-converter
 | R7 | Remove KiCad 9-only elements (`table`, `rule_area`, `embedded_files`) |
 | R8 | Remove `margins` from `text_box` and `exclude_from_sim` from `text`/`text_box` |
 
-### Schematic (.kicad_sch) — KiCad 8 → KiCad 7 (R10-R15)
+</details>
+
+<details>
+<summary><b>KiCad 8 → 7</b> — R10–R15</summary>
 
 | Rule | Description |
 |------|-------------|
@@ -93,7 +159,10 @@ You can try it here: https://www.nextpcb.com/kicad-version-converter
 | R14 | `(fields_autoplaced yes)` → `(fields_autoplaced)` (remove value parameter); remove `(dnp)` node |
 | R15 | Auto-convert embedded non-PNG images (e.g. BMP) to PNG using Canvas API (KiCad 7 only supports PNG) |
 
-### Schematic (.kicad_sch) — KiCad 7 → KiCad 6 (R20-R30)
+</details>
+
+<details>
+<summary><b>KiCad 7 → 6</b> — R20–R30</summary>
 
 | Rule | Description |
 |------|-------------|
@@ -110,9 +179,9 @@ You can try it here: https://www.nextpcb.com/kicad-version-converter
 | R29 | Remove the now-redundant per-object `(instances ...)` blocks |
 | R30 | Downgrade `(fill (type color) (color ...))` → `(fill (type background))` (plain `(fill (color ...))` left untouched) |
 
-> ⚠️ **KiCad 6 verification note**: The KiCad 6 instance table is reconstructed heuristically from KiCad 7 hierarchy paths. Reference designators are also preserved in each symbol's `Reference` property, but deeply nested hierarchical projects should be re-opened in KiCad 6 to confirm the result.
+</details>
 
-### Schematic (.kicad_sch → .sch) — KiCad 6 → KiCad 5 (legacy crossing)
+#### KiCad 6 → 5 — `.kicad_sch` → `.sch` (legacy crossing)
 
 KiCad 5 schematics use the legacy Eeschema **text** format, not S-expressions, so this is a cross-family rewrite rather than a node-by-node edit. The converter emits:
 
@@ -121,9 +190,16 @@ KiCad 5 schematics use the legacy Eeschema **text** format, not S-expressions, s
 
 **Symbol resolution**: cache symbols are named `nickname_item` (e.g. `video_schlib_S5933_PQ160`) — exactly the key KiCad 5 builds when it falls back to the project cache (`SCH_COMPONENT::Resolve` formats the lib id and replaces `:` with `_`), so a component `L video_schlib:S5933_PQ160 U11` resolves automatically. For a **hierarchical project**, upload all its `.kicad_sch` files together: the converter finds the root sheet and merges every sheet's symbols into one shared `<root>-cache.lib` (KiCad 5 loads a single project cache for the whole hierarchy).
 
-Coordinates convert mm → mil (no axis flip). Component orientation/mirror matrices, symbol arc geometry, and **label orientation** are verified against KiCad's own source and legacy demo output (rotations, mirrors, combined mirror+rotation, pin/arc angles all match). Note the label-orientation quirk handled here: KiCad stores **global/hierarchical** label orientation with `0`↔`2` swapped relative to **local** labels (documented in `sch_legacy_plugin` `loadText`), so directional ports map `{angle 0→2, 90→1, 180→0, 270→3}` while local labels/text use `angle/90` — without this the port pennants point the wrong way. **Lossy / limitations**: one sheet per file (designators come from each symbol's `Reference` property; cross-sheet instance `AR` tables are not synthesized, so deep hierarchies may need re-annotation); hierarchical sheet *pins* (sheet ports) use a best-effort side mapping. Verify before use.
+Coordinates convert mm → mil (no axis flip). Component orientation/mirror matrices, symbol arc geometry, and **label orientation** are verified against KiCad's own source and legacy demo output (rotations, mirrors, combined mirror+rotation, pin/arc angles all match). Note the label-orientation quirk handled here: KiCad stores **global/hierarchical** label orientation with `0`↔`2` swapped relative to **local** labels (documented in `sch_legacy_plugin` `loadText`), so directional ports map `{angle 0→2, 90→1, 180→0, 270→3}` while local labels/text use `angle/90` — without this the port pennants point the wrong way.
 
-### Symbol Library (.kicad_sym) — KiCad 10 → KiCad 9 (NS1-NS8)
+> ⚠️ **Lossy / limitations**: one sheet per file (designators come from each symbol's `Reference` property; cross-sheet instance `AR` tables are not synthesized, so deep hierarchies may need re-annotation); hierarchical sheet *pins* (sheet ports) use a best-effort side mapping. Verify before use.
+
+> ⚠️ **Hierarchical sheets**: projects with sub-sheet references must have all `.kicad_sch` files uploaded and converted together — otherwise KiCad reports version errors when opening sub-sheets. For KiCad 7 → 6, the KiCad 6 instance table is reconstructed heuristically from KiCad 7 hierarchy paths (reference designators are also preserved in each symbol's `Reference` property), so deeply nested projects should be re-opened in KiCad 6 to confirm the result.
+
+### Symbol Library (`.kicad_sym`)
+
+<details>
+<summary><b>KiCad 10 → 9</b> — NS1–NS8</summary>
 
 | Rule | Description |
 |------|-------------|
@@ -135,7 +211,10 @@ Coordinates convert mm → mil (no axis flip). Component orientation/mirror matr
 | NS7 | Remove `(body_styles ...)` nodes from symbols |
 | NS8 | Empty pin name `(name "")` → `(name "~")` (K10 uses empty string; K9 uses tilde) |
 
-### Symbol Library (.kicad_sym) — KiCad 9 → KiCad 8 (S1-S4)
+</details>
+
+<details>
+<summary><b>KiCad 9 → 8</b> — S1–S4</summary>
 
 | Rule | Description |
 |------|-------------|
@@ -144,7 +223,10 @@ Coordinates convert mm → mil (no axis flip). Component orientation/mirror matr
 | S3 | `(hide yes)` → bare `hide` in `pin` definitions |
 | S4 | Remove `(embedded_fonts no)` at the end of each symbol definition |
 
-### Symbol Library (.kicad_sym) — KiCad 8 → KiCad 7 (S10-S14)
+</details>
+
+<details>
+<summary><b>KiCad 8 → 7</b> — S10–S14</summary>
 
 | Rule | Description |
 |------|-------------|
@@ -154,7 +236,10 @@ Coordinates convert mm → mil (no axis flip). Component orientation/mirror matr
 | S13 | `(hide yes)` → bare `hide`, `(bold yes)` → bare `bold`, `(italic yes)` → bare `italic` in `effects`/`font` |
 | S14 | Remove `(pin_numbers hide)` node; remove `hide` flag from `pin_names` |
 
-### Symbol Library (.kicad_sym) — KiCad 7 → KiCad 6 (S20-S23)
+</details>
+
+<details>
+<summary><b>KiCad 7 → 6</b> — S20–S23</summary>
 
 | Rule | Description |
 |------|-------------|
@@ -163,16 +248,25 @@ Coordinates convert mm → mil (no axis flip). Component orientation/mirror matr
 | S22 | Remove `(hide ...)` and `(alternate ...)` child lists from pins |
 | S23 | Downgrade `(fill (type color) (color ...))` → `(fill (type background))` |
 
-### Symbol Library (.kicad_sym → .lib + .dcm) — KiCad 6 → KiCad 5 (legacy crossing)
+</details>
+
+#### KiCad 6 → 5 — `.kicad_sym` → `.lib` + `.dcm` (legacy crossing)
 
 KiCad 5 symbol libraries use the legacy `.lib` (2.4) + `.dcm` (2.0) **text** formats. The converter emits:
 
 - `<name>.lib` — `EESchema-LIBRARY Version 2.4` with one `DEF … ENDDEF` per symbol: `F0–F3` standard fields + custom `F4+`, `ALIAS` lines for derived (`extends`) symbols, `$FPLIST` from `ki_fp_filters`, and a `DRAW` section (`S` rectangle, `C` circle, `P` polyline, `A` arc, `T` text, `X` pins).
 - `<name>.dcm` — `$CMP`/`D`/`K`/`F` records from `ki_description`/`ki_keywords`/`Datasheet` (only when present).
 
-Coordinates convert mm → mil (symbols are Y-up in both formats; no flip). Pin electrical types/shapes, hide flags, power symbols (`P` flag), multi-unit (`_unit_style`) layout, and `extends` → `ALIAS` are mapped. **Lossy / limitations**: a derived symbol with its own graphics keeps only the base graphics (legacy `ALIAS` limitation). Output is **not validated against a real KiCad 5**.
+Coordinates convert mm → mil (symbols are Y-up in both formats; no flip). Pin electrical types/shapes, hide flags, power symbols (`P` flag), multi-unit (`_unit_style`) layout, and `extends` → `ALIAS` are mapped.
 
-### PCB (.kicad_pcb) — KiCad 10 → KiCad 9 (NP1-NP11)
+> ⚠️ **Lossy / limitations**: a derived symbol with its own graphics keeps only the base graphics (legacy `ALIAS` limitation). Output is **not validated against a real KiCad 5**.
+
+### PCB (`.kicad_pcb`)
+
+> *(KiCad 10.99 → 10 is covered [above](#kicad-1099--kicad-10-nightly--stable).)*
+
+<details>
+<summary><b>KiCad 10 → 9</b> — NP1–NP11</summary>
 
 | Rule | Description |
 |------|-------------|
@@ -188,7 +282,10 @@ Coordinates convert mm → mil (symbols are Y-up in both formats; no flip). Pin 
 | NP10 | Restore `(unlocked yes)` and font `(thickness 0.15)` on Datasheet/Description properties in footprints |
 | NP11 | Remove `(radius ...)` from `gr_rect`/`fp_rect` (K10 rounded rectangle feature; not supported in K9) |
 
-### PCB (.kicad_pcb) — KiCad 9 → KiCad 8 (P1-P9, P21-P23, P27)
+</details>
+
+<details>
+<summary><b>KiCad 9 → 8</b> — P1–P9, P21–P23, P27</summary>
 
 | Rule | Description |
 |------|-------------|
@@ -206,7 +303,10 @@ Coordinates convert mm → mil (symbols are Y-up in both formats; no flip). Pin 
 | P23 | `(curved_edges ...)` → `(curve_points ...)` in pad teardrops (K9 rename; K8 uses old name) |
 | P27 | `(solder_paste_margin_ratio ...)` → `(solder_paste_ratio ...)` (K9 rename; K8 uses old name) |
 
-### PCB (.kicad_pcb) — KiCad 8 → KiCad 7 (P10-P28)
+</details>
+
+<details>
+<summary><b>KiCad 8 → 7</b> — P10–P28</summary>
 
 | Rule | Description |
 |------|-------------|
@@ -231,7 +331,10 @@ Coordinates convert mm → mil (symbols are Y-up in both formats; no flip). Pin 
 | P27 | Remove K8-only flags from footprint `(attr ...)` (`dnp`, `allow_missing_courtyard`) |
 | P28 | Remove top-level `(generated ...)` elements (tuning patterns and other KiCad 8-only features; not supported in K7) |
 
-### PCB (.kicad_pcb) — KiCad 7 → KiCad 6 (P40-P49)
+</details>
+
+<details>
+<summary><b>KiCad 7 → 6</b> — P40–P49</summary>
 
 | Rule | Description |
 |------|-------------|
@@ -244,12 +347,13 @@ Coordinates convert mm → mil (symbols are Y-up in both formats; no flip). Pin 
 | P45 | Remove `(render_cache ...)` from `gr_text`/`fp_text` |
 | P46 | Via layer-connection attrs: `(remove_unused_layers yes)`/`(keep_end_layers yes)` → bare flag (removed when `no`); remove `(zone_layer_connections ...)` and `(free ...)` |
 | P47 | Remove `(thermal_bridge_angle ...)` from pads/zones; remove `(attr ...)` from zones |
-| P48 | Dimension downgrade: `(type radial)` → `(type leader)` and remove the radial-only `(leader_length ...)` — **radial dimensions are a KiCad 7 feature; KiCad 6 only supports `aligned`/`orthogonal`/`leader`/`center`, so an un-downgraded `(type radial)` makes the whole board fail to load (crash on open)**. Also remove `(arrow_direction ...)` from dimension style |
+| P48 | Dimension downgrade: `(type radial)` → `(type leader)` and remove the radial-only `(leader_length ...)`; also remove `(arrow_direction ...)` from dimension style |
 | P49 | Remove `(hide ...)` from 3D `model` nodes |
 
-> ⚠️ **Radial dimension note (lossy)**: KiCad 6 has no radial dimension type. P48 rewrites `(type radial)` to the closest analog, a `leader` dimension (leader line + text), preserving the text/format (including `override_value`) and dropping the radial-only `leader_length`. The annotation survives but its semantics degrade from a true radial/diameter measurement to a plain leader callout. A warning is emitted per converted dimension. (These radial dimensions often live *inside* footprints in KiCad 7; P41b first lifts them to the board root, then P48 downgrades the type.)
+</details>
 
-### PCB (.kicad_pcb) — KiCad 6 → KiCad 5 (P50-P64)
+<details>
+<summary><b>KiCad 6 → 5</b> — P50–P64</summary>
 
 | Rule | Description |
 |------|-------------|
@@ -270,34 +374,28 @@ Coordinates convert mm → mil (symbols are Y-up in both formats; no flip). Pin 
 | P63 | Strip `(fill …)` from graphic shapes (`gr_poly`/`fp_poly`/`gr_circle`/…) — K5's graphic parser rejects it; zone fill is left intact |
 | P64 | Remove `(group …)` nodes — KiCad 6 object grouping (board-level + nested); K5 has no groups (*"Unknown token group"*). Grouped objects survive, ungrouped |
 
-> K6-only `pcbplotparams` (`dxf…`, `svg…`, `dashed_line_*`, `sketchpadsonfab`, `disableapertmacros`, …) are left as-is — KiCad 5's `pcbplotparams` sub-parser silently skips unknown tokens (verified against the 5.1 source).
+</details>
 
-> ✅ **Validated against a real KiCad 5**: rules were derived/checked by diffing the regenerated board against KiCad's own `5.1/demos/video/video.kicad_pcb` per node type, and against the 5.1 `PCB_PARSER` source (strict main parser vs. lenient `pcbplotparams`). Real boards then surfaced a cascade of load errors that this also fixed — the `(host …)` header, `(paper)`→`(page)`, `User.1`–`User.9` layer removal, graphic `(fill …)`, model `(offset)`→`(at)`, board-level `(group …)`, footprint-name-with-parens quoting, and a `rectToLines` width-coercion bug (`[object Object]`). The most reliable check is a **whole-board grammar audit** (every top-level node type and every `(module …)` child against KiCad 5's accepted token sets), so the converter is checked structurally, not just one error at a time. Remaining lossy item: dropped parametric dimensions (P61) are simply removed, not redrawn.
+> ⚠️ **Radial dimension note (lossy)** — KiCad 6 has no radial dimension type. P48 rewrites `(type radial)` to the closest analog, a `leader` dimension (leader line + text), preserving the text/format (including `override_value`) and dropping the radial-only `leader_length`. The annotation survives but its semantics degrade from a true radial/diameter measurement to a plain leader callout (a warning is emitted per dimension). An un-downgraded `(type radial)` would make the whole KiCad 6 board fail to load. These dimensions often live *inside* footprints in KiCad 7; P41b first lifts them to the board root, then P48 downgrades the type.
 
-### Footprint (.kicad_mod) — KiCad 6 → KiCad 5 (F30-F38)
+> 📝 **K6→K5 note** — K6-only `pcbplotparams` (`dxf…`, `svg…`, `dashed_line_*`, `sketchpadsonfab`, `disableapertmacros`, …) are left as-is; KiCad 5's `pcbplotparams` sub-parser silently skips unknown tokens (verified against the 5.1 source).
 
-| Rule | Description |
-|------|-------------|
-| F30 | `(footprint ...)` → `(module ...)`: drop `version`/`generator`, unquote the name **only when bare-safe** (names with spaces/parens stay quoted), ensure a `(tedit ...)` timestamp |
-| F31 | Map `(attr ...)` to bare `smd`/`virtual` (through-hole + sub-flags dropped) |
-| F32 | `fp_arc` 3-point `(start)(mid)(end)` → `(start=center)(end)(angle)` |
-| F33 | `roundrect`/`custom` pads → `rect`; strip KiCad 6-only pad attributes |
-| F34 | `fp_rect` → four `fp_line` segments |
-| F35 | Remove all `(tstamp ...)`/`(uuid ...)` |
-| F36 | Drop KiCad 6-only children (`property`/`group`/`net_tie_pad_groups`); truncate `(path ...)` to 8-hex |
-| F37 | Strip `(fill …)` from graphic shapes — KiCad 5's `parseEDGE_MODULE` rejects any graphic fill (not just `(fill no)`) |
-| F38 | 3D model `(offset (xyz …))` → `(at (xyz …))` (K5 `model` node uses `at`) |
+> ✅ **K6→K5 validated against a real KiCad 5** — rules were derived/checked by diffing the regenerated board against KiCad's own `5.1/demos/video/video.kicad_pcb` per node type, and against the 5.1 `PCB_PARSER` source (strict main parser vs. lenient `pcbplotparams`). Real boards then surfaced a cascade of load errors this also fixed — the `(host …)` header, `(paper)`→`(page)`, `User.1`–`User.9` layer removal, graphic `(fill …)`, model `(offset)`→`(at)`, board-level `(group …)`, footprint-name-with-parens quoting, and a `rectToLines` width-coercion bug (`[object Object]`). The most reliable check is a **whole-board grammar audit** (every top-level node type and every `(module …)` child against KiCad 5's accepted token sets), so the converter is checked structurally, not just one error at a time. Remaining lossy item: dropped parametric dimensions (P61).
 
-> **Note**: the bundled KiCad 6 test footprints are already in legacy `(module)` form; this path is exercised by chained conversions from KiCad 7–10 footprints.
+### Footprint (`.kicad_mod`)
 
-### Footprint (.kicad_mod) — KiCad 10 → KiCad 9 (NF1-NF2)
+<details>
+<summary><b>KiCad 10 → 9</b> — NF1–NF2</summary>
 
 | Rule | Description |
 |------|-------------|
 | NF1 | Header version downgrade (`version` → `20241229`, `generator_version` → `9.0`) |
 | NF2 | Remove `(duplicate_pad_numbers_are_jumpers ...)` (K10-new; doesn't exist in K9) |
 
-### Footprint (.kicad_mod) — KiCad 9 → KiCad 8 (F1-F4)
+</details>
+
+<details>
+<summary><b>KiCad 9 → 8</b> — F1–F4</summary>
 
 | Rule | Description |
 |------|-------------|
@@ -306,7 +404,10 @@ Coordinates convert mm → mil (symbols are Y-up in both formats; no flip). Pin 
 | F3 | Remove `thickness` from Datasheet/Description property fonts |
 | F4 | `(curved_edges ...)` → `(curve_points ...)` in pad teardrops (boolean → numeric) |
 
-### Footprint (.kicad_mod) — KiCad 8 → KiCad 7 (F10-F18)
+</details>
+
+<details>
+<summary><b>KiCad 8 → 7</b> — F10–F18</summary>
 
 | Rule | Description |
 |------|-------------|
@@ -320,7 +421,10 @@ Coordinates convert mm → mil (symbols are Y-up in both formats; no flip). Pin 
 | F17 | `(hide yes)` → bare `hide`, `(bold yes)` → bare `bold`, `(italic yes)` → bare `italic`; remove `(unlocked yes)` |
 | F18 | Unquote pad wildcard layer names: `"*.Cu"` → `*.Cu` (KiCad 7 uses unquoted atoms) |
 
-### Footprint (.kicad_mod) — KiCad 7 → KiCad 6 (F20-F26)
+</details>
+
+<details>
+<summary><b>KiCad 7 → 6</b> — F20–F26</summary>
 
 | Rule | Description |
 |------|-------------|
@@ -332,27 +436,48 @@ Coordinates convert mm → mil (symbols are Y-up in both formats; no flip). Pin 
 | F25 | Pad layer-connection attrs: `(remove_unused_layers yes)`/`(keep_end_layers yes)` → bare flag (removed when `no`); remove `(zone_layer_connections ...)` and `(thermal_bridge_angle ...)` |
 | F26 | Remove `(hide ...)` from 3D `model` nodes |
 
-> **Footprint version note**: The footprint format stamp for KiCad 7 is `20221018` and for KiCad 6 is `20211014`. (The K8→K7 footprint rule F10 now writes `20221018`.)
+</details>
 
-## Quick Start
+<details>
+<summary><b>KiCad 6 → 5</b> — F30–F38</summary>
+
+| Rule | Description |
+|------|-------------|
+| F30 | `(footprint ...)` → `(module ...)`: drop `version`/`generator`, unquote the name **only when bare-safe** (names with spaces/parens stay quoted), ensure a `(tedit ...)` timestamp |
+| F31 | Map `(attr ...)` to bare `smd`/`virtual` (through-hole + sub-flags dropped) |
+| F32 | `fp_arc` 3-point `(start)(mid)(end)` → `(start=center)(end)(angle)` |
+| F33 | `roundrect`/`custom` pads → `rect`; strip KiCad 6-only pad attributes |
+| F34 | `fp_rect` → four `fp_line` segments |
+| F35 | Remove all `(tstamp ...)`/`(uuid ...)` |
+| F36 | Drop KiCad 6-only children (`property`/`group`/`net_tie_pad_groups`); truncate `(path ...)` to 8-hex |
+| F37 | Strip `(fill …)` from graphic shapes — KiCad 5's `parseEDGE_MODULE` rejects any graphic fill (not just `(fill no)`) |
+| F38 | 3D model `(offset (xyz …))` → `(at (xyz …))` (K5 `model` node uses `at`) |
+
+</details>
+
+> 📝 **Footprint version stamps** — KiCad 7 footprints use `20221018`, KiCad 6 use `20211014`. The bundled KiCad 6 test footprints are already in legacy `(module)` form, so the K6→K5 path is exercised by chained conversions from KiCad 7–10 footprints.
+
+## Verification
+
+KiCad 6 → KiCad 5 is the only conversion that crosses a file-family boundary and the only one that has been checked against **real KiCad 5** behavior. The other paths are mechanically verified — they re-parse and emit the right version stamps. Because a real KiCad 5 install wasn't available in-repo, the K5 output was validated against KiCad's **own source and demo projects**:
+
+- **PCB / footprint** — rules derived by diffing the regenerated board/footprint against KiCad's own `5.1/demos/video/video.kicad_pcb` per node type, and cross-checked with the 5.1 `PCB_PARSER` source (strict main parser vs. lenient `pcbplotparams`). This caught the `(host …)` header, `(paper)`→`(page)`, `User.1`–`User.9` layer removal, graphic-`fill`, model `offset`→`at`, board-level `(group)`, footprint-name-with-parens quoting, and dimension issues. A **whole-board grammar audit** (top-level node types + every `(module)` child vs. KiCad 5's accepted token sets) finds remaining issues structurally rather than one load-error round-trip at a time. `test-k5-pcb-synth.mjs` locks in every PCB rule without needing the (gitignored) asset fixtures.
+- **Schematic / symbol** — component orientation/mirror matrices, symbol arcs, and label orientation verified against KiCad 6/5.1 source (`sch_symbol.cpp`, `sch_sexpr_parser.cpp`, `sch_legacy_plugin.cpp`) and the matching legacy demo sheets; cache symbol naming verified against `SCH_COMPONENT::Resolve`.
+
+Run all harnesses (`node scripts/<file>`):
 
 ```bash
-# Install dependencies
-npm install
-
-# Start development server
-npm run dev
-
-# Build for production
-npm run build
+for t in test-k1099-k10 test-k6k5 test-k5-pcb-synth check-k5-header test-cache-match test-consolidate test-orient test-arc-roundtrip test-label-orient; do node scripts/$t.mjs; done
 ```
+
+> Still best-effort (no KiCad-5 ground truth available): hierarchical **sheet-pin** side letters, dropped PCB parametric **dimensions** (removed, not redrawn), and the entire **KiCad 10.99 → 10** path (no public KiCad 10 build to round-trip through; DP7 is verified against KiCad's own KiCad 10 demo).
 
 ## Tech Stack
 
-- **React** + **Vite** — Front-end framework and build tool
-- **S-expression Parser** — Custom KiCad S-expression parser (`src/lib/sexpr-parser.js`)
-- **Converter** — AST-based version conversion engine (`src/lib/converter.js` + `src/lib/sym-converter.js` + `src/lib/pcb-converter.js` + `src/lib/fp-converter.js`), supporting KiCad 10.99/10/9/8/7/6 chained downgrade
-- **Legacy writers** — KiCad 5 cross-family text emitters: `src/lib/sch-legacy-writer.js` (`.kicad_sch` → `.sch` + cache) and `src/lib/sym-legacy-writer.js` (`.kicad_sym` → `.lib`/`.dcm`)
+- **React** + **Vite** — front-end framework and build tool
+- **S-expression parser** — custom KiCad S-expression parser/serializer (`src/lib/sexpr-parser.js`)
+- **AST-based converters** — `converter.js` (schematic) + `sym-converter.js` (symbol) + `pcb-converter.js` (PCB) + `fp-converter.js` (footprint), supporting the KiCad 10.99/10/9/8/7/6 chained downgrade
+- **Legacy writers** — KiCad 5 cross-family text emitters: `sch-legacy-writer.js` (`.kicad_sch` → `.sch` + cache) and `sym-legacy-writer.js` (`.kicad_sym` → `.lib`/`.dcm`)
 
 ## Project Structure
 
@@ -361,56 +486,31 @@ converter/
 ├── src/
 │   ├── lib/
 │   │   ├── sexpr-parser.js       # S-expression parser and serializer
-│   │   ├── converter.js          # Unified conversion entry + schematic conversion rules
-│   │   ├── sym-converter.js      # Symbol library conversion rules (S-expression, K10→K6)
-│   │   ├── pcb-converter.js      # PCB conversion rules (incl. K6→K5)
-│   │   ├── fp-converter.js       # Footprint conversion rules (incl. K6→K5)
-│   │   ├── sch-legacy-writer.js  # KiCad 6 → KiCad 5 legacy .sch writer (+ cache .lib)
-│   │   └── sym-legacy-writer.js  # KiCad 6 → KiCad 5 legacy .lib/.dcm writer
-│   ├── App.jsx                   # Main application component (file upload, conversion, download)
+│   │   ├── converter.js          # Unified conversion entry + schematic rules
+│   │   ├── sym-converter.js      # Symbol library rules (S-expression, K10→K6)
+│   │   ├── pcb-converter.js      # PCB rules (incl. K6→K5)
+│   │   ├── fp-converter.js       # Footprint rules (incl. K6→K5)
+│   │   ├── sch-legacy-writer.js  # KiCad 6 → 5 legacy .sch writer (+ cache .lib)
+│   │   └── sym-legacy-writer.js  # KiCad 6 → 5 legacy .lib/.dcm writer
+│   ├── App.jsx                   # Main UI (upload, convert, download, 10.99 banner)
 │   └── main.jsx                  # Entry point
-├── scripts/                     # Verification harnesses (run with `node scripts/<file>`)
-│   ├── test-k1099-k10.mjs       # self-contained: KiCad 10.99 → 10 schematic + PCB rules (D1-D4, DP1-DP7) + detection
-│   ├── test-k6k5.mjs            # end-to-end: all 4 file types convert, re-parse, right stamps, value-level checks
-│   ├── test-k5-pcb-synth.mjs    # self-contained (no asset deps): one synthetic K6 board exercising every K5 PCB rule (P50-P64)
-│   ├── check-k5-header.mjs      # emulates KiCad 5 PCB_PARSER::parseHeader (catches the (host …) issue)
-│   ├── test-cache-match.mjs     # every schematic L lib_id resolves to a cache DEF/ALIAS
-│   ├── test-consolidate.mjs     # hierarchical project → one shared <root>-cache.lib
-│   ├── test-orient.mjs          # component matrices vs KiCad's exact orientation/mirror formula
-│   ├── test-arc-roundtrip.mjs   # symbol arc angles ↔ endpoints self-consistent
-│   └── test-label-orient.mjs    # label orientation vs KiCad 5 demo ground truth
+├── scripts/                      # Verification harnesses (run with `node scripts/<file>`)
+│   ├── test-k1099-k10.mjs        # KiCad 10.99 → 10 schematic + PCB rules (D1-D4, DP1-DP7) + detection
+│   ├── test-k6k5.mjs             # end-to-end: all 4 file types convert, re-parse, right stamps, value checks
+│   ├── test-k5-pcb-synth.mjs     # self-contained synthetic K6 board exercising every K5 PCB rule (P50-P64)
+│   ├── check-k5-header.mjs       # emulates KiCad 5 PCB_PARSER::parseHeader (catches the (host …) issue)
+│   ├── test-cache-match.mjs      # every schematic L lib_id resolves to a cache DEF/ALIAS
+│   ├── test-consolidate.mjs      # hierarchical project → one shared <root>-cache.lib
+│   ├── test-orient.mjs           # component matrices vs KiCad's exact orientation/mirror formula
+│   ├── test-arc-roundtrip.mjs    # symbol arc angles ↔ endpoints self-consistent
+│   └── test-label-orient.mjs     # label orientation vs KiCad 5 demo ground truth
 ├── index.html
 ├── package.json
 └── vite.config.js
 ```
 
-## Verification
+## Credits
 
-KiCad 6 → KiCad 5 is the only conversion that crosses a file-family boundary and the only one
-that has been checked against **real KiCad 5** behavior (the other paths are mechanically
-verified — they re-parse and emit the right version stamps). Because a real KiCad 5 install
-wasn't available in-repo, the K5 output was validated against KiCad's **own source and demo
-projects**:
+Some of the version-downgrade rule sets — in particular the **KiCad 10.99 → 10** backport rules — were informed by [**AskStr/kicad-backport-cplus**](https://github.com/AskStr/kicad-backport-cplus). Thanks to that project for the reference.
 
-- **PCB / footprint** — rules derived by diffing the regenerated board/footprint against
-  KiCad's own `5.1/demos/video/video.kicad_pcb` per node type, and cross-checked with the 5.1
-  `PCB_PARSER` source (strict main parser vs. lenient `pcbplotparams`). This caught the
-  `(host …)` header, `(paper)`→`(page)`, `User.1`–`User.9` layer removal, graphic-`fill`,
-  model `offset`→`at`, board-level `(group)`, footprint-name-with-parens quoting, and
-  dimension issues. A **whole-board grammar audit** (top-level node types + every `(module)`
-  child vs. KiCad 5's accepted token sets) finds remaining issues structurally rather than
-  one load-error round-trip at a time. `test-k5-pcb-synth.mjs` locks in every PCB rule without
-  needing the (gitignored) asset fixtures.
-- **Schematic / symbol** — component orientation/mirror matrices, symbol arcs, and label
-  orientation verified against KiCad 6/5.1 source (`sch_symbol.cpp`, `sch_sexpr_parser.cpp`,
-  `sch_legacy_plugin.cpp`) and the matching legacy demo sheets; cache symbol naming verified
-  against `SCH_COMPONENT::Resolve`.
-
-Run all harnesses:
-
-```bash
-for t in test-k1099-k10 test-k6k5 test-k5-pcb-synth check-k5-header test-cache-match test-consolidate test-orient test-arc-roundtrip test-label-orient; do node scripts/$t.mjs; done
-```
-
-> Still best-effort (no KiCad-5 ground truth available): hierarchical **sheet-pin** side
-> letters, and dropped PCB parametric **dimensions** (removed, not redrawn).
+Where this converter deviates from it, the differences are noted inline in the [Conversion Rules](#conversion-rules) — e.g. KiCad 10's `User.1`–`User.9` layers are kept rather than remapped to KiCad 5's fixed layer set, and DP7 (`transform` → `at`) was added from a real KiCad 10.99 board that failed to load.
