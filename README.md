@@ -2,6 +2,7 @@
 
 一个基于浏览器的工具，用于将 KiCad 原理图文件（`.kicad_sch`）、符号库文件（`.kicad_sym`）、PCB 文件（`.kicad_pcb`）和封装文件（`.kicad_mod`）进行版本降级转换，支持以下转换路径：
 
+- **KiCad 10.99 → KiCad 10** —— 仅原理图和 PCB；10.99 是开发版 / 每夜构建分支（未来的 KiCad 11），格式仍在变化中
 - **KiCad 10 → KiCad 9**（原理图/符号库/PCB/封装）
 - **KiCad 9 → KiCad 8**
 - **KiCad 8 → KiCad 7**
@@ -14,12 +15,40 @@
 - **浏览器端转换**：纯前端实现，无需服务器，文件不会上传到任何地方
 - **四种文件类型**：支持 `.kicad_sch`（原理图）、`.kicad_sym`（符号库）、`.kicad_pcb`（PCB）和 `.kicad_mod`（封装）
 - **批量处理**：支持同时上传多个文件，一键转换并打包下载
-- **自动检测**：自动检测文件类型和版本（支持 KiCad 6/7/8/9/10），使用对应的转换规则
+- **自动检测**：自动检测文件类型和版本（支持 KiCad 6/7/8/9/10/10.99），使用对应的转换规则
+- **KiCad 10.99 识别**：自动识别每夜构建 / 开发版 10.99 的原理图和 PCB（依据高于稳定版 KiCad 10 的版本号，或 `generator_version "10.99"`），并以醒目提示告知该预发布格式仍在变化中——请转换为 KiCad 10 并重新核对后再使用
 - **传统 KiCad 5 输出**：KiCad 6 原理图/符号库会输出为传统 Eeschema `.sch` 和 `.lib`/`.dcm` 格式；单个输入可能产生多个文件（例如 `.sch` + `-cache.lib`）
 - **链式降级**：例如 KiCad 10 → KiCad 5 会自动执行五步转换（10→9→8→7→6→5）
 - **转换日志**：显示详细的转换过程日志和警告信息
 
 ## 转换规则
+
+### KiCad 10.99 → KiCad 10（开发版 / 每夜构建 → 稳定版）
+
+> 🧪 **KiCad 10.99 是预发布 / 每夜构建分支**（未来的 KiCad 11），文件格式仍在变化中，因此该路径为尽力而为，并会随每夜构建的演进而更新。检测到 10.99 文件时，应用会给出醒目提示；转换后请务必在 KiCad 10 中重新打开核对。**仅支持原理图和 PCB**——10.99 的符号库/封装暂不在范围内。检测依据为高于稳定版 KiCad 10 的版本号，或 `generator_version "10.99"`。
+
+#### 原理图 (.kicad_sch) — D1-D4
+
+| 规则 | 说明 |
+|------|------|
+| D1 | 文件头降级到 KiCad 10（`version` → `20260306`，`generator_version` → `10.0`） |
+| D2 | 移除原生 `(ellipse …)` / `(ellipse_arc …)` 图元（10.99 原理图新特性） |
+| D3 | 移除 `(net_chain …)` / `(net_chains …)`（10.99 原理图新特性） |
+| D4 | 移除 `(locked …)` 字段（10.99 原理图格式新增） |
+
+#### PCB (.kicad_pcb) — DP1-DP7
+
+| 规则 | 说明 |
+|------|------|
+| DP1 | 文件头降级到 KiCad 10（`version` → `20260206`，`generator_version` → `10.0`） |
+| DP2 | 移除仅 10.99 支持的板级对象/字段：`extruded`、`gr_ellipse`/`fp_ellipse`(`_arc`)、`spec_frequency`/`dielectric_model`、`net_chain`/`net_chains`、`thieving`（有损） |
+| DP3 | 移除 `(model … (type …))` 挤出式 3D 实体块（保留普通文件路径模型） |
+| DP4 | 覆铜 thieving 填充区 `(mode thieving)` → `(mode polygon)` |
+| DP5 | 移除 `table_cell` 中的 `(knockout …)` |
+| DP6 | 移除 `pad` 中的 `(sim_electrical_type …)` |
+| DP7 | **封装位置** `(transform (translate X Y) (rotate A) (scale SX SY))` → `(at X Y A)` —— KiCad 10.99 用 `transform` 块取代了 `(at …)`，而 KiCad 10 没有 `transform` 标记，未转换的板子会加载失败。3D 模型的 `(scale (xyz …))` / `(rotate (xyz …))` 保持不变；非单位缩放会被丢弃并给出警告（KiCad 10 无法缩放放置对象） |
+
+> ⚠️ **尚未在运行的 KiCad 10 上验证**（暂无公开版本可供往返测试）。DP1-DP6 遵循 AskStr/kicad-backport 参考规则集；**DP7 来自一块真实 10.99 板子加载失败的反馈**，并已与 KiCad 自带的 KiCad 10 示例逐字节比对验证（同一封装存储为 `(at 110.49 78.867 180)`）。此处刻意**不**套用参考实现的用户层重映射——它针对 KiCad 5 的固定层集，会丢弃 KiCad 10 完全支持的 `User.1`–`User.9` / 层显示名字段。
 
 ### 原理图 (.kicad_sch) — KiCad 10 → KiCad 9（N1-N10）
 
@@ -320,7 +349,7 @@ npm run build
 
 - **React** + **Vite** — 前端框架与构建工具
 - **S-expression Parser** — 自定义的 KiCad S-表达式解析器（`src/lib/sexpr-parser.js`）
-- **Converter** — 基于 AST 的版本转换引擎（`src/lib/converter.js` + `src/lib/sym-converter.js` + `src/lib/pcb-converter.js` + `src/lib/fp-converter.js`），支持 KiCad 10/9/8/7/6 链式降级
+- **Converter** — 基于 AST 的版本转换引擎（`src/lib/converter.js` + `src/lib/sym-converter.js` + `src/lib/pcb-converter.js` + `src/lib/fp-converter.js`），支持 KiCad 10.99/10/9/8/7/6 链式降级
 - **传统格式写入器** — KiCad 5 跨家族文本输出：`src/lib/sch-legacy-writer.js`（`.kicad_sch` → `.sch` + 缓存）和 `src/lib/sym-legacy-writer.js`（`.kicad_sym` → `.lib`/`.dcm`）
 
 ## 项目结构
@@ -338,7 +367,8 @@ converter/
 │   │   └── sym-legacy-writer.js  # KiCad 6 → KiCad 5 传统 .lib/.dcm 写入器
 │   ├── App.jsx                   # 主应用组件（文件上传、转换、下载）
 │   └── main.jsx                  # 入口文件
-├── scripts/                     # KiCad 6 → KiCad 5 验证脚本（用 `node scripts/<file>` 运行）
+├── scripts/                     # 验证脚本（用 `node scripts/<file>` 运行）
+│   ├── test-k1099-k10.mjs       # 自包含：KiCad 10.99 → 10 原理图 + PCB 规则（D1-D4、DP1-DP7）+ 检测
 │   ├── test-k6k5.mjs            # 端到端：四种文件类型转换、重新解析、版本号正确、值级检查
 │   ├── test-k5-pcb-synth.mjs    # 自包含（不依赖素材）：一块合成 K6 板覆盖所有 K5 PCB 规则（P50-P64）
 │   ├── check-k5-header.mjs      # 模拟 KiCad 5 PCB_PARSER::parseHeader（捕获 (host …) 问题）
@@ -362,7 +392,7 @@ KiCad 6 → KiCad 5 是唯一跨文件家族边界的转换，也是唯一对照
 运行全部验证脚本：
 
 ```bash
-for t in test-k6k5 test-k5-pcb-synth check-k5-header test-cache-match test-consolidate test-orient test-arc-roundtrip test-label-orient; do node scripts/$t.mjs; done
+for t in test-k1099-k10 test-k6k5 test-k5-pcb-synth check-k5-header test-cache-match test-consolidate test-orient test-arc-roundtrip test-label-orient; do node scripts/$t.mjs; done
 ```
 
 > 仍为尽力而为（无 KiCad 5 真值可对照）：层次图纸的**图纸引脚**方位字母，以及被丢弃的 PCB 参数化**尺寸标注**（删除而非重绘）。
