@@ -299,6 +299,11 @@ body {
   gap: 0.3rem;
 }
 
+.file-info-version.k1099 {
+  color: #7c3aed;
+  font-weight: 600;
+}
+
 .file-info-version.k10 {
   color: var(--hq-red);
   font-weight: 600;
@@ -559,6 +564,35 @@ body {
   position: absolute;
   left: 0;
   color: var(--accent-warning);
+}
+
+/* === KiCad 10.99 development-version notice === */
+.beta-banner {
+  display: flex;
+  gap: 0.85rem;
+  align-items: flex-start;
+  background: linear-gradient(135deg, rgba(124, 58, 237, 0.08), var(--accent-warning-glow));
+  border: 1px solid rgba(124, 58, 237, 0.28);
+  border-left: 4px solid #7c3aed;
+  border-radius: var(--radius-md);
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.5rem;
+}
+
+.beta-banner-icon {
+  font-size: 1.4rem;
+  line-height: 1.4;
+  flex-shrink: 0;
+}
+
+.beta-banner-text {
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.beta-banner-text strong {
+  color: var(--text-primary);
 }
 
 /* === Batch Mode === */

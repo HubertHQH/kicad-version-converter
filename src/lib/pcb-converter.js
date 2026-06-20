@@ -127,6 +127,8 @@ const PCB_VERSIONS = {
     KICAD8: { version: '20240108', generatorVersion: '8.0', label: 'KiCad 8' },
     KICAD9: { version: '20241229', generatorVersion: '9.0', label: 'KiCad 9' },
     KICAD10: { version: '20260206', generatorVersion: '10.0', label: 'KiCad 10' },
+    // KiCad 10.99 (nightly/dev line, future KiCad 11). Board format 20260603.
+    KICAD10_99: { version: '20260603', generatorVersion: '10.99', label: 'KiCad 10.99' },
 };
 
 export { PCB_VERSIONS };
@@ -193,6 +195,164 @@ const LAYER_NAME_TO_LEGACY_ID = {
     'User.5': 54, 'User.6': 55, 'User.7': 56, 'User.8': 57,
     'User.9': 58,
 };
+
+// ============================================================
+//  KiCad 10.99 → KiCad 10 Conversion (PCB, DP-series rules)
+// ============================================================
+//
+// KiCad 10.99 is the development/nightly board format (20260603, future K11).
+// Compared with stable KiCad 10 (20260206) it adds objects/fields the KiCad 10
+// PCB parser rejects. This step removes just those additions and restamps the
+// header. Rules DP1-DP6 follow the AskStr/kicad-backport reference (BOARD_RULES plus
+// the model-type, thieving-mode, table-cell-knockout and pad-sim-type rules that fire
+// for target 20260206). DP7 (transform → at) is NOT in that reference: board format
+// 20260603 replaced footprint (at …) placement with a (transform (translate)(rotate)
+// (scale)) block after the reference's rule set (which stops at 20260513). It was
+// found from a real user board failing to load in KiCad 10.
+//
+// Deliberate deviation: the reference also runs `downgrade_pcb_user_layers_to_fixed`
+// for every target below 20260603, but that routine maps user layers through the
+// KiCad-5 fixed set (dropping User.1/User.5-9 and the layer display name). KiCad 10
+// fully supports those, so applying it here would corrupt valid layers — it is
+// intentionally NOT done. Verify converted boards in KiCad 10 (no public build was
+// available to validate against).
+
+export async function applyPcbK1099toK10(ast, log, warnings) {
+    const stats = {
+        dp1_header: false,
+        dp2_features: 0,
+        dp3_model_type: 0,
+        dp4_thieving_mode: 0,
+        dp5_table_knockout: 0,
+        dp6_pad_simtype: 0,
+        dp7_transform: 0,
+    };
+
+    // DP1: Header → KiCad 10
+    setChildValue(ast, 'version', PCB_VERSIONS.KICAD10.version);
+    setChildValue(ast, 'generator_version', PCB_VERSIONS.KICAD10.generatorVersion);
+    stats.dp1_header = true;
+    log.push(`DP1: Version → ${PCB_VERSIONS.KICAD10.version}, generator_version → "${PCB_VERSIONS.KICAD10.generatorVersion}"`);
+
+    // DP2: Remove 10.99-only board objects/fields that KiCad 10 cannot parse (lossy).
+    //   extruded ......................... 20260410 (procedural 3D bodies)
+    //   gr_/fp_ellipse[_arc] ............. 20260508 (native ellipse primitives)
+    //   spec_frequency / dielectric_model  20260511 (freq-dependent stackup)
+    //   net_chain / net_chains ........... 20260512
+    //   thieving ......................... 20260513 (copper thieving fill objects)
+    const k1099Features = ['extruded', 'gr_ellipse', 'gr_ellipse_arc', 'fp_ellipse', 'fp_ellipse_arc',
+        'spec_frequency', 'dielectric_model', 'net_chain', 'net_chains', 'thieving'];
+    for (const name of k1099Features) {
+        const removed = removeDescendantsByName(ast, name);
+        if (removed > 0) {
+            stats.dp2_features += removed;
+            warnings.push(`Removed ${removed} (${name}) element(s) - KiCad 10.99 feature not available in KiCad 10`);
+        }
+    }
+
+    // DP3-DP6: single recursive pass
+    transformPcbK1099toK10(ast, stats, log, warnings);
+
+    if (stats.dp3_model_type > 0) {
+        warnings.push(`Removed ${stats.dp3_model_type} typed/extruded 3D model block(s) - not available in KiCad 10`);
+    }
+    if (stats.dp4_thieving_mode > 0) {
+        warnings.push(`Downgraded ${stats.dp4_thieving_mode} copper thieving zone fill(s) to polygon fill`);
+    }
+    if (stats.dp7_transform > 0) {
+        warnings.push(`Converted ${stats.dp7_transform} KiCad 10.99 (transform …) placement block(s) back to (at …)`);
+    }
+
+    log.push('--- K10.99→K10 Summary ---');
+    log.push(`DP1 Header downgraded: ${stats.dp1_header ? 'Yes' : 'No'}`);
+    log.push(`DP2 10.99-only features removed: ${stats.dp2_features}`);
+    log.push(`DP3 typed 3D model blocks removed: ${stats.dp3_model_type}`);
+    log.push(`DP4 thieving fill modes downgraded: ${stats.dp4_thieving_mode}`);
+    log.push(`DP5 table_cell knockout flags removed: ${stats.dp5_table_knockout}`);
+    log.push(`DP6 pad sim_electrical_type removed: ${stats.dp6_pad_simtype}`);
+    log.push(`DP7 transform → at blocks converted: ${stats.dp7_transform}`);
+}
+
+/**
+ * DP7 helper: convert a KiCad 10.99 placement transform
+ *   (transform (translate X Y) (rotate A) (scale SX SY))
+ * into a KiCad 10 (at X Y A) node. Returns the new (at …) node, or null when the
+ * block is not a recognisable placement transform (left untouched in that case).
+ * KiCad 10 placed objects cannot scale, so a non-unit scale is dropped with a warning.
+ */
+function transformNodeToAt(t, warnings) {
+    const translate = findChild(t, 'translate');
+    if (!translate || translate.children.length < 2) return null;
+    const atom = (v) => ({ type: 'atom', value: String(v) });
+    const x = translate.children[0].value;
+    const y = translate.children[1].value;
+
+    const rotate = findChild(t, 'rotate');
+    const angle = rotate && rotate.children.length > 0 ? rotate.children[0].value : null;
+
+    const scale = findChild(t, 'scale');
+    if (scale && scale.children.some(c => (c.type === 'atom' || c.type === 'string') &&
+        c.value !== '1' && c.value !== '1.0' && c.value !== '1.00000')) {
+        warnings.push('Dropped a non-unit (scale …) from a KiCad 10.99 transform - KiCad 10 cannot scale placed objects');
+    }
+
+    const children = [atom(x), atom(y)];
+    if (angle != null && String(angle) !== '0' && String(angle) !== '0.0') children.push(atom(angle));
+    return { type: 'list', name: 'at', children };
+}
+
+function transformPcbK1099toK10(node, stats, log, warnings) {
+    if (!node || node.type !== 'list') return;
+
+    // DP3: Remove (model ... (type ...)) typed/extruded 3D model blocks anywhere.
+    // A normal KiCad 10 (model ...) has no (type ...) child, so plain models are kept.
+    {
+        const before = node.children.length;
+        node.children = node.children.filter(c => !(c.type === 'list' && c.name === 'model' && findChild(c, 'type')));
+        stats.dp3_model_type += before - node.children.length;
+    }
+
+    // DP4: Copper thieving zone fill → polygon fill. The mode is an atom value:
+    // (zone ... (fill yes (mode thieving) ...)) → (mode polygon).
+    if (node.name === 'mode') {
+        for (const child of node.children) {
+            if (child.type === 'atom' && child.value === 'thieving') {
+                child.value = 'polygon';
+                stats.dp4_thieving_mode++;
+            }
+        }
+    }
+
+    // DP5: Remove (knockout ...) from table cells (10.99 PCB, format 20260603).
+    if (node.name === 'table_cell') {
+        stats.dp5_table_knockout += removeAllChildren(node, 'knockout');
+    }
+
+    // DP6: Remove (sim_electrical_type ...) from pads (10.99 PCB, format 20260521).
+    if (node.name === 'pad') {
+        stats.dp6_pad_simtype += removeAllChildren(node, 'sim_electrical_type');
+    }
+
+    // DP7: KiCad 10.99 stores footprint (and other object) placement as a
+    // (transform (translate X Y) (rotate A) (scale SX SY)) block; KiCad 10 uses
+    // (at X Y A). Replace any transform child in place. (3D model (scale (xyz …))
+    // / (rotate (xyz …)) are separate nodes, never wrapped in a transform, so
+    // they are not affected.)
+    for (let i = 0; i < node.children.length; i++) {
+        const c = node.children[i];
+        if (c.type === 'list' && c.name === 'transform') {
+            const at = transformNodeToAt(c, warnings);
+            if (at) {
+                node.children[i] = at;
+                stats.dp7_transform++;
+            }
+        }
+    }
+
+    for (const child of node.children) {
+        transformPcbK1099toK10(child, stats, log, warnings);
+    }
+}
 
 // ============================================================
 //  KiCad 10 → KiCad 9 Conversion (PCB)

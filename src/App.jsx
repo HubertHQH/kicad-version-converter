@@ -11,6 +11,7 @@ function App() {
   const fileInputRef = useRef(null)
 
   const targetOptions = [
+    { key: 'KICAD10', label: 'KiCad 10', version: '20260206' },
     { key: 'KICAD9', label: 'KiCad 9', version: '20250114' },
     { key: 'KICAD8', label: 'KiCad 8', version: '20231120' },
     { key: 'KICAD7', label: 'KiCad 7', version: '20230121' },
@@ -40,6 +41,7 @@ function App() {
         version: info.version,
         generatorVersion: info.generatorVersion,
         label: info.label,
+        isKicad1099: info.isKicad1099,
         isKicad10: info.isKicad10,
         isKicad9: info.isKicad9,
         isKicad8: info.isKicad8,
@@ -51,16 +53,18 @@ function App() {
     }))
 
     // Auto-set target: default to one major version below the highest detected file.
+    const hasKicad1099 = parsed.some(f => f.isKicad1099)
     const hasKicad10 = parsed.some(f => f.isKicad10)
     const hasKicad9 = parsed.some(f => f.isKicad9)
     const hasKicad8 = parsed.some(f => f.isKicad8)
     const hasKicad7 = parsed.some(f => f.isKicad7)
     setTargetVersion(
-      hasKicad10 ? 'KICAD9'
-        : hasKicad9 ? 'KICAD8'
-          : hasKicad8 ? 'KICAD7'
-            : hasKicad7 ? 'KICAD6'
-              : 'KICAD5'
+      hasKicad1099 ? 'KICAD10'
+        : hasKicad10 ? 'KICAD9'
+          : hasKicad9 ? 'KICAD8'
+            : hasKicad8 ? 'KICAD7'
+              : hasKicad7 ? 'KICAD6'
+                : 'KICAD5'
     )
 
     setFiles(parsed)
@@ -185,6 +189,7 @@ function App() {
   }
 
   const getVersionClass = (label) => {
+    if (label === 'KiCad 10.99') return 'k1099'
     if (label === 'KiCad 10') return 'k10'
     if (label === 'KiCad 9') return 'k9'
     if (label === 'KiCad 8') return 'k8'
@@ -192,6 +197,21 @@ function App() {
     if (label === 'KiCad 6') return 'k6'
     return ''
   }
+
+  // KiCad 10.99 是开发版 / 每夜构建分支，格式仍在变化中，因此给出醒目提示，
+  // 提醒用户转换结果需要重新核对。
+  const has1099 = files.some(f => f.isKicad1099)
+  const betaBanner = (
+    <div className="beta-banner">
+      <span className="beta-banner-icon">🧪</span>
+      <div className="beta-banner-text">
+        <strong>检测到 KiCad 10.99（开发版 / 每夜构建）文件。</strong>这是仍在变化中的预发布格式，
+        转换为尽力而为，并会随 KiCad 10.99 的演进而调整。降级到 <strong>KiCad 10</strong> 会丢弃仅
+        10.99 支持的特性（原生椭圆、网络链 net chain、覆铜 thieving、挤出式 3D 模型等）。
+        转换后请务必在 KiCad 10 中打开并核对，确认无误后再使用。
+      </div>
+    </div>
+  )
 
   return (
     <div className="app-container">
@@ -205,9 +225,9 @@ function App() {
         </div>
         <p className="app-subtitle">在线转换 KiCad 原理图、符号库、PCB 和封装文件的版本</p>
         <div className="version-badges">
-          <span className="version-badge from">KiCad 10 / 9 / 8 / 7 / 6</span>
+          <span className="version-badge from">KiCad 10.99 / 10 / 9 / 8 / 7 / 6</span>
           <span className="version-arrow">→</span>
-          <span className="version-badge to">KiCad 9 / 8 / 7 / 6 / 5</span>
+          <span className="version-badge to">KiCad 10 / 9 / 8 / 7 / 6 / 5</span>
         </div>
       </header>
 
@@ -243,6 +263,7 @@ function App() {
       {/* File List + Target Version Selector */}
       {files.length > 0 && !results && (
         <div className="fade-in">
+          {has1099 && betaBanner}
           <div className="batch-controls">
             <div className="target-version-selector">
               <label className="target-label">目标版本：</label>
@@ -308,6 +329,7 @@ function App() {
       {/* Results */}
       {results && (
         <div className="fade-in">
+          {has1099 && betaBanner}
           {/* Success Panel */}
           <div className="result-panel">
             <div className="result-header">
