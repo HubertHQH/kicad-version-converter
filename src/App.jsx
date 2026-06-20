@@ -11,6 +11,7 @@ function App() {
   const fileInputRef = useRef(null)
 
   const targetOptions = [
+    { key: 'KICAD10', label: 'KiCad 10', version: '20260206' },
     { key: 'KICAD9', label: 'KiCad 9', version: '20250114' },
     { key: 'KICAD8', label: 'KiCad 8', version: '20231120' },
     { key: 'KICAD7', label: 'KiCad 7', version: '20230121' },
@@ -40,6 +41,7 @@ function App() {
         version: info.version,
         generatorVersion: info.generatorVersion,
         label: info.label,
+        isKicad1099: info.isKicad1099,
         isKicad10: info.isKicad10,
         isKicad9: info.isKicad9,
         isKicad8: info.isKicad8,
@@ -51,16 +53,18 @@ function App() {
     }))
 
     // Auto-set target: default to one major version below the highest detected file.
+    const hasKicad1099 = parsed.some(f => f.isKicad1099)
     const hasKicad10 = parsed.some(f => f.isKicad10)
     const hasKicad9 = parsed.some(f => f.isKicad9)
     const hasKicad8 = parsed.some(f => f.isKicad8)
     const hasKicad7 = parsed.some(f => f.isKicad7)
     setTargetVersion(
-      hasKicad10 ? 'KICAD9'
-        : hasKicad9 ? 'KICAD8'
-          : hasKicad8 ? 'KICAD7'
-            : hasKicad7 ? 'KICAD6'
-              : 'KICAD5'
+      hasKicad1099 ? 'KICAD10'
+        : hasKicad10 ? 'KICAD9'
+          : hasKicad9 ? 'KICAD8'
+            : hasKicad8 ? 'KICAD7'
+              : hasKicad7 ? 'KICAD6'
+                : 'KICAD5'
     )
 
     setFiles(parsed)
@@ -186,6 +190,7 @@ function App() {
   }
 
   const getVersionClass = (label) => {
+    if (label === 'KiCad 10.99') return 'k1099'
     if (label === 'KiCad 10') return 'k10'
     if (label === 'KiCad 9') return 'k9'
     if (label === 'KiCad 8') return 'k8'
@@ -193,6 +198,22 @@ function App() {
     if (label === 'KiCad 6') return 'k6'
     return ''
   }
+
+  // KiCad 10.99 is the development/nightly line. Surface a prominent notice so
+  // users know the format is still in flux and output should be re-verified.
+  const has1099 = files.some(f => f.isKicad1099)
+  const betaBanner = (
+    <div className="beta-banner">
+      <span className="beta-banner-icon">🧪</span>
+      <div className="beta-banner-text">
+        <strong>KiCad 10.99 (development / nightly) detected.</strong> This is a pre-release
+        format that is still changing — conversion is best-effort and may need updating as
+        KiCad 10.99 evolves. Downgrading to <strong>KiCad 10</strong> drops nightly-only
+        features (native ellipses, net chains, copper thieving, extruded 3D bodies, …).
+        Always open the converted files in KiCad 10 to verify them before use.
+      </div>
+    </div>
+  )
 
   return (
     <div className="app-container">
@@ -205,9 +226,9 @@ function App() {
         </div>
         <p className="app-subtitle">Convert KiCad schematics, symbol libraries, PCBs &amp; footprints between versions</p>
         <div className="version-badges">
-          <span className="version-badge from">KiCad 10 / 9 / 8 / 7 / 6</span>
+          <span className="version-badge from">KiCad 10.99 / 10 / 9 / 8 / 7 / 6</span>
           <span className="version-arrow">→</span>
-          <span className="version-badge to">KiCad 9 / 8 / 7 / 6 / 5</span>
+          <span className="version-badge to">KiCad 10 / 9 / 8 / 7 / 6 / 5</span>
         </div>
       </header>
 
@@ -243,6 +264,7 @@ function App() {
       {/* File List + Target Version Selector */}
       {files.length > 0 && !results && (
         <div className="fade-in">
+          {has1099 && betaBanner}
           <div className="batch-controls">
             <div className="target-version-selector">
               <label className="target-label">Target Version:</label>
@@ -308,6 +330,7 @@ function App() {
       {/* Results */}
       {results && (
         <div className="fade-in">
+          {has1099 && betaBanner}
           {/* Success Panel */}
           <div className="result-panel">
             <div className="result-header">

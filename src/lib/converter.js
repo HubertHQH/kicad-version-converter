@@ -5,6 +5,7 @@
  *   .kicad_sch (Schematic), .kicad_sym (Symbol Library), .kicad_pcb (PCB), .kicad_mod (Footprint)
  * 
  * Conversion paths:
+ *   KiCad 10.99 → KiCad 10   (schematic + PCB only; 10.99 is the nightly/dev line)
  *   KiCad 10 → KiCad 9
  *   KiCad 9 → KiCad 8
  *   KiCad 8 → KiCad 7
@@ -20,6 +21,7 @@
  * AST to the legacy writer. A single input may therefore yield several output files
  * (returned as result.outputFiles).
  *
+ * Schematic conversion rules (K10.99 → K10): D1-D4
  * Schematic conversion rules (K10 → K9): N1-N10
  * Schematic conversion rules (K9 → K8): R1-R8
  * Schematic conversion rules (K8 → K7): R10-R15
@@ -30,6 +32,7 @@
  * Symbol library conversion rules (K8 → K7): S10-S14
  * Symbol library conversion rules (K7 → K6): S20-S23
  * Symbol library conversion (K6 → K5): legacy .lib/.dcm writer — sym-legacy-writer.js
+ * PCB conversion rules (K10.99 → K10): DP1-DP7
  * PCB conversion rules (K10 → K9): NP1-NP11
  * PCB conversion rules (K9 → K8): P1-P9, P21-P23, P27
  * PCB conversion rules (K8 → K7): P10-P28
@@ -63,6 +66,7 @@ import {
 } from './sym-converter.js';
 
 import {
+    applyPcbK1099toK10,
     applyPcbK10toK9,
     applyPcbK9toK8,
     applyPcbK8toK7,
@@ -123,7 +127,12 @@ const VERSIONS = {
     KICAD7: { version: '20230121', generatorVersion: null, label: 'KiCad 7' },
     KICAD8: { version: '20231120', generatorVersion: '8.0', label: 'KiCad 8' },
     KICAD9: { version: '20250114', generatorVersion: '9.0', label: 'KiCad 9' },
-    KICAD10: { version: '20260101', generatorVersion: '10.0', label: 'KiCad 10' },
+    KICAD10: { version: '20260306', generatorVersion: '10.0', label: 'KiCad 10' },
+    // KiCad 10.99 is the development/nightly line that becomes KiCad 11. The
+    // schematic format is still changing; this stamp is the best-known nightly
+    // value. Detection also accepts generator_version "10.99" so files are still
+    // recognised if the nightly format version differs from the value here.
+    KICAD10_99: { version: '20260512', generatorVersion: '10.99', label: 'KiCad 10.99' },
 };
 
 // SYM_VERSIONS imported from sym-converter.js
@@ -166,12 +175,24 @@ export function detectVersion(input) {
     let label = 'Unknown';
     let detectedKey = null;
 
+    const k10VersionNum = parseInt(versionTable.KICAD10.version);
     const k9VersionNum = parseInt(versionTable.KICAD9.version);
     const k8VersionNum = parseInt(versionTable.KICAD8.version);
     const k7VersionNum = parseInt(versionTable.KICAD7.version);
     const k6VersionNum = versionTable.KICAD6 ? parseInt(versionTable.KICAD6.version) : -1;
 
-    if (versionNum > k9VersionNum) {
+    // KiCad 10.99 (nightly) is only distinguished for file types that define it
+    // (schematic + PCB). It sits above the stable KiCad 10 stamp; because the
+    // nightly schematic format version is not pinned, generator_version "10.99"
+    // is accepted as an equivalent signal.
+    const is1099ByGen = /^10\.99\b/.test(generatorVersion || '');
+    const isKicad1099 = !!versionTable.KICAD10_99 && (versionNum > k10VersionNum || is1099ByGen);
+
+    if (isKicad1099) {
+        detectedVersion = versionTable.KICAD10_99;
+        label = 'KiCad 10.99';
+        detectedKey = 'KICAD10_99';
+    } else if (versionNum > k9VersionNum) {
         detectedVersion = versionTable.KICAD10;
         label = 'KiCad 10';
         detectedKey = 'KICAD10';
@@ -201,7 +222,7 @@ export function detectVersion(input) {
     const isKicad8 = versionNum > k7VersionNum;
     const isKicad7 = versionNum > k6VersionNum;
 
-    return { version, generatorVersion, detectedVersion, label, detectedKey, isKicad7, isKicad8, isKicad9, isKicad10 };
+    return { version, generatorVersion, detectedVersion, label, detectedKey, isKicad7, isKicad8, isKicad9, isKicad10, isKicad1099 };
 }
 
 /**
@@ -254,18 +275,36 @@ export async function convertKicad(input, targetVersionKey, fileName = '', opts 
     // Determine input major version
     const inputVersionNum = parseInt(inputVersion);
     const targetVersionNum = parseInt(targetVersion.version);
+    const k10VersionNum = parseInt(versionTable.KICAD10.version);
     const k9VersionNum = parseInt(versionTable.KICAD9.version);
     const k8VersionNum = parseInt(versionTable.KICAD8.version);
     const k7VersionNum = parseInt(versionTable.KICAD7.version);
     const k6VersionNum = versionTable.KICAD6 ? parseInt(versionTable.KICAD6.version) : -1;
     const k5VersionNum = versionTable.KICAD5 ? parseInt(versionTable.KICAD5.version) : -1;
 
-    if (!legacyK5 && inputVersionNum <= targetVersionNum) {
+    // A KiCad 10.99 (nightly) input sits above the stable KiCad 10 stamp. The
+    // nightly schematic format version is not pinned, so generator_version
+    // "10.99" is accepted as an equivalent signal. Only schematic/PCB tables
+    // define KICAD10_99 (symbol/footprint 10.99 → 10 is out of scope for now).
+    const inputIsK1099 = !!versionTable.KICAD10_99 &&
+        (inputVersionNum > k10VersionNum || /^10\.99\b/.test(inputGenerator || ''));
+
+    if (!legacyK5 && !inputIsK1099 && inputVersionNum <= targetVersionNum) {
         warnings.push(`File version ${inputVersion} is already ${targetVersion.label} or earlier. No conversion needed.`);
     }
 
     // Build conversion chain based on file type
     const steps = [];
+
+    // K10.99 → K10 step (schematic + PCB only). Must run first so the later
+    // K10 → K9 … steps see a clean KiCad 10 AST.
+    if (inputIsK1099 && targetVersionNum <= k10VersionNum) {
+        if (isSchematic) {
+            steps.push({ from: versionTable.KICAD10_99, to: versionTable.KICAD10, fn: applyK1099toK10 });
+        } else if (isPcb) {
+            steps.push({ from: versionTable.KICAD10_99, to: versionTable.KICAD10, fn: applyPcbK1099toK10 });
+        }
+    }
 
     // K10 → K9 step
     if (inputVersionNum > k9VersionNum && targetVersionNum <= k9VersionNum) {
@@ -427,6 +466,61 @@ function collectSubSheetFiles(node, result) {
     for (const child of node.children) {
         collectSubSheetFiles(child, result);
     }
+}
+
+// ============================================================
+//  KiCad 10.99 → KiCad 10 Conversion (Schematic, D-series rules)
+// ============================================================
+//
+// KiCad 10.99 is the development/nightly line (future KiCad 11). Compared with
+// stable KiCad 10 it adds a handful of schematic primitives/fields that the
+// KiCad 10 parser rejects. This step strips just those additions and restamps
+// the header to KiCad 10. Rules and the format dates they guard against follow
+// the AskStr/kicad-backport reference (SCHEMATIC_RULES + the `locked` rule).
+//
+// NOTE: the 10.99 schematic format is still in flux. There is no public KiCad 10
+// build to validate the output against; verify converted schematics before use.
+
+async function applyK1099toK10(ast, log, warnings) {
+    const stats = { d1_header: false, d2_ellipse: 0, d3_net_chain: 0, d4_locked: 0 };
+
+    // D1: Header → KiCad 10 (version + generator_version). The 10.99 schematic
+    // stamp may equal KiCad 10's, so this can be a no-op on the number itself.
+    setChildValue(ast, 'version', VERSIONS.KICAD10.version);
+    setChildValue(ast, 'generator_version', VERSIONS.KICAD10.generatorVersion);
+    stats.d1_header = true;
+    log.push(`D1: Version → ${VERSIONS.KICAD10.version}, generator_version → "${VERSIONS.KICAD10.generatorVersion}"`);
+
+    // D2: Remove native ellipse primitives (10.99 schematic, format 20260508).
+    for (const name of ['ellipse', 'ellipse_arc']) {
+        const removed = removeDescendantsByName(ast, name);
+        if (removed > 0) {
+            stats.d2_ellipse += removed;
+            warnings.push(`Removed ${removed} (${name}) element(s) - KiCad 10.99 native ellipse not available in KiCad 10`);
+        }
+    }
+
+    // D3: Remove schematic net chains (10.99 schematic, format 20260512).
+    for (const name of ['net_chain', 'net_chains']) {
+        const removed = removeDescendantsByName(ast, name);
+        if (removed > 0) {
+            stats.d3_net_chain += removed;
+            warnings.push(`Removed ${removed} (${name}) element(s) - KiCad 10.99 net chains not available in KiCad 10`);
+        }
+    }
+
+    // D4: Remove (locked ...) fields (10.99 schematic, format 20260326).
+    const removedLocked = removeDescendantsByName(ast, 'locked');
+    if (removedLocked > 0) {
+        stats.d4_locked += removedLocked;
+        warnings.push(`Removed ${removedLocked} schematic (locked) field(s) - not available in KiCad 10`);
+    }
+
+    log.push('--- K10.99→K10 Summary ---');
+    log.push(`D1 Header downgraded: ${stats.d1_header ? 'Yes' : 'No'}`);
+    log.push(`D2 ellipse primitives removed: ${stats.d2_ellipse}`);
+    log.push(`D3 net_chain elements removed: ${stats.d3_net_chain}`);
+    log.push(`D4 locked fields removed: ${stats.d4_locked}`);
 }
 
 // ============================================================
