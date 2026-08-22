@@ -316,7 +316,7 @@ KiCad 5 符号库使用传统的 `.lib`（2.4）+ `.dcm`（2.0）**文本**格�
 
 > **封装版本提示**：KiCad 7 的封装格式特征版本是 `20221018`，而 KiCad 6 是 `20211014`。（K8→K7 的封装规则 F10 现已更新为写入 `20221018`。）
 
-### 封装 (.kicad_mod) — KiCad 6 → KiCad 5（F30-F38）
+### 封装 (.kicad_mod) — KiCad 6 → KiCad 5（F30-F39）
 
 | 规则 | 说明 |
 |------|------|
@@ -329,6 +329,7 @@ KiCad 5 符号库使用传统的 `.lib`（2.4）+ `.dcm`（2.0）**文本**格�
 | F36 | 丢弃 KiCad 6 专有子项（`property`/`group`/`net_tie_pad_groups`）；把 `(path ...)` 截断为 8 位十六进制 |
 | F37 | 从图形形状中去掉 `(fill …)`——KiCad 5 的 `parseEDGE_MODULE` 会拒绝任何图形 fill（不仅是 `(fill no)`） |
 | F38 | 3D 模型 `(offset (xyz …))` → `(at (xyz …))`（K5 的 `model` 节点用 `at`） |
+| F39 | 移除 `fp_text` 的 `(at …)` 中的裸 `unlocked` 标志，使 KiCad 5 封装也能被 KiCad 4 打开 |
 
 > **说明**：随仓库附带的 KiCad 6 测试封装已经是传统 `(module)` 形式；此路径由 KiCad 7–10 封装的链式转换来覆盖。
 
