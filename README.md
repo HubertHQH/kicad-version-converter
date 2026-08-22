@@ -24,7 +24,7 @@ Conversion happens **one major version at a time**, and steps are **chained auto
 | **Schematic** `.kicad_sch` | ✅ D1–D4 | ✅ N1–N10 | ✅ R1–R8 | ✅ R10–R15 | ✅ R20–R30 | ✅ → legacy `.sch` + `-cache.lib` |
 | **Symbol library** `.kicad_sym` | — | ✅ NS1–NS8 | ✅ S1–S4 | ✅ S10–S14 | ✅ S20–S23 | ✅ → legacy `.lib` + `.dcm` |
 | **PCB** `.kicad_pcb` | ✅ DP1–DP7 | ✅ NP1–NP11 | ✅ P1–P9, P21–P23, P27 | ✅ P10–P28 | ✅ P40–P49 | ✅ P50–P64 |
-| **Footprint** `.kicad_mod` | — | ✅ NF1–NF2 | ✅ F1–F4 | ✅ F10–F18 | ✅ F20–F26 | ✅ F30–F38 |
+| **Footprint** `.kicad_mod` | — | ✅ NF1–NF2 | ✅ F1–F4 | ✅ F10–F18 | ✅ F20–F26 | ✅ F30–F39 |
 
 Two boundaries are special:
 
@@ -439,7 +439,7 @@ Coordinates convert mm → mil (symbols are Y-up in both formats; no flip). Pin 
 </details>
 
 <details>
-<summary><b>KiCad 6 → 5</b> — F30–F38</summary>
+<summary><b>KiCad 6 → 5</b> — F30–F39</summary>
 
 | Rule | Description |
 |------|-------------|
@@ -452,6 +452,7 @@ Coordinates convert mm → mil (symbols are Y-up in both formats; no flip). Pin 
 | F36 | Drop KiCad 6-only children (`property`/`group`/`net_tie_pad_groups`); truncate `(path ...)` to 8-hex |
 | F37 | Strip `(fill …)` from graphic shapes — KiCad 5's `parseEDGE_MODULE` rejects any graphic fill (not just `(fill no)`) |
 | F38 | 3D model `(offset (xyz …))` → `(at (xyz …))` (K5 `model` node uses `at`) |
+| F39 | Remove bare `unlocked` from `fp_text` `(at …)` so KiCad 4 can open the KiCad 5 footprint |
 
 </details>
 

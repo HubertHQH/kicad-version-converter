@@ -40,7 +40,7 @@
  *   F25: Pad layer-connection attrs: bare flag / removal; remove zone_layer_connections/thermal_bridge_angle
  *   F26: Remove (hide ...) from 3D model nodes
  *
- * Conversion rules (K6 → K5): F30-F38  ((footprint ...) → legacy (module ...))
+ * Conversion rules (K6 → K5): F30-F39  ((footprint ...) → legacy (module ...))
  *   F30: (footprint ...) → (module ...); drop version/generator; ensure (tedit ...)
  *   F31: (attr ...) → bare smd/virtual (through-hole + sub-flags dropped)
  *   F32: fp_arc 3-point (start/mid/end) → (start=center)(end)(angle)
@@ -50,6 +50,7 @@
  *   F36: Drop K6-only children (property/group/net_tie_pad_groups); truncate (path ...) to 8-hex
  *   F37: Strip (fill ...) from graphic shapes (K5 parseEDGE_MODULE rejects any graphic fill)
  *   F38: 3D model (offset (xyz ...)) → (at (xyz ...))
+ *   F39: Remove bare unlocked flag from fp_text (at ...) for KiCad 4 compatibility
  */
 
 import {
@@ -640,6 +641,7 @@ export async function applyFpK6toK5(ast, log, warnings) {
         f36_dropped: 0,
         f37_graphic_fill: 0,
         f38_model_offset: 0,
+        f39_text_unlocked: 0,
     };
 
     // F30: (footprint ...) → (module ...); drop version/generator; ensure (tedit ...)
@@ -705,10 +707,25 @@ export async function applyFpK6toK5(ast, log, warnings) {
     log.push(`F36 K6-only children dropped: ${stats.f36_dropped}`);
     log.push(`F37 graphic (fill) removed: ${stats.f37_graphic_fill}`);
     log.push(`F38 model offset → at: ${stats.f38_model_offset}`);
+    log.push(`F39 fp_text (at ...) unlocked flags removed: ${stats.f39_text_unlocked}`);
 }
 
 function transformFpK6toK5(node, stats, log, warnings) {
     if (!node || node.type !== 'list') return;
+
+    // F39: KiCad 5 accepts the optional bare `unlocked` flag in an fp_text
+    // (at ...) node, but KiCad 4 rejects it. KiCad 5 footprint files are
+    // otherwise usable by KiCad 4, so omit the flag from K5 output.
+    if (node.name === 'fp_text') {
+        for (const child of node.children) {
+            if (child.type !== 'list' || child.name !== 'at') continue;
+            const before = child.children.length;
+            child.children = child.children.filter(
+                c => !(c.type === 'atom' && c.value === 'unlocked')
+            );
+            stats.f39_text_unlocked += before - child.children.length;
+        }
+    }
 
     // Unquote simple layer name tokens (KiCad 5 writes them bare)
     if (node.name === 'layer' || node.name === 'layers') {
