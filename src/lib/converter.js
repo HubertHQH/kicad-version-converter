@@ -39,7 +39,7 @@
  * PCB conversion rules (K7 → K6): P40-P49
  * PCB conversion rules (K6 → K5): P50-P63
  * Footprint conversion rules (K10 → K9): NF1-NF3
- * Footprint conversion rules (K9 → K8): F1-F4
+ * Footprint conversion rules (K9 → K8): F1-F5
  * Footprint conversion rules (K8 → K7): F10-F18
  * Footprint conversion rules (K7 → K6): F20-F26
  * Footprint conversion rules (K6 → K5): F30-F38

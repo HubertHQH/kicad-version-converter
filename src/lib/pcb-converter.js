@@ -37,7 +37,7 @@
  *        convert (suppress_zeroes yes) list to bare atom in dimension format
  *   P22: Remove (placement ...) from zone definitions (multi-channel auto-placement area, K9 only)
  *   P23: Rename (curved_edges ...) → (curve_points ...) in pad teardrops
- *   P27: Rename (solder_paste_margin_ratio) → (solder_paste_ratio) in footprints/pads
+ *   P27: Rename footprint-level (solder_paste_margin_ratio) → (solder_paste_ratio); preserve pad tokens
  * 
  * Conversion rules (K8 → K7): P10-P28
  *   P10: Header downgrade (version, remove generator_version, unquote generator)
@@ -132,6 +132,19 @@ const PCB_VERSIONS = {
 };
 
 export { PCB_VERSIONS };
+
+/**
+ * KiCad 9 renamed the footprint-level paste ratio token. KiCad 8 and earlier
+ * require solder_paste_ratio on footprints, but solder_paste_margin_ratio on
+ * pads. Rename only direct footprint children and preserve the numeric value.
+ * Shared by standalone footprint and PCB conversions. Returns the rename count.
+ */
+export function downgradeFootprintSolderPasteRatio(node) {
+    if (!node || node.type !== 'list' || node.name !== 'footprint') return 0;
+    const ratios = findChildren(node, 'solder_paste_margin_ratio');
+    for (const ratio of ratios) ratio.name = 'solder_paste_ratio';
+    return ratios.length;
+}
 
 // --- Layer ID Mapping ---
 // K9 uses a new compact layer numbering scheme, K8/K7 uses legacy 0-49 IDs.
@@ -1023,12 +1036,8 @@ function transformPcbK9toK8(node, stats, log, warnings) {
         }
     }
 
-    // P27: Rename (solder_paste_margin_ratio ...) → (solder_paste_ratio ...)
-    // K9 renamed solder_paste_ratio to solder_paste_margin_ratio; K8 doesn't recognize it.
-    if (node.name === 'solder_paste_margin_ratio') {
-        node.name = 'solder_paste_ratio';
-        stats.p27_solder_paste_ratio = (stats.p27_solder_paste_ratio || 0) + 1;
-    }
+    // P27: Only the footprint-level token changed in K9; pad tokens stay as-is.
+    stats.p27_solder_paste_ratio += downgradeFootprintSolderPasteRatio(node);
 
     // P21: Fix dimension style nodes for K8 compatibility
     // K9 adds (arrow_direction outward) which K8 doesn't support.

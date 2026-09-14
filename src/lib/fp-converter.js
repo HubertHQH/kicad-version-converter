@@ -14,11 +14,12 @@
  *   NF2: Remove (duplicate_pad_numbers_are_jumpers ...) from footprint
  *   NF3: Remove (radius ...) from fp_rect (K10 rounded rect, not supported in K9)
  * 
- * Conversion rules (K9 → K8): F1-F4
+ * Conversion rules (K9 → K8): F1-F5
  *   F1: Header downgrade (version, generator_version)
  *   F2: Remove (embedded_fonts ...) from footprint
  *   F3: Remove font thickness from Datasheet/Description property effects
  *   F4: Convert (curved_edges yes/no) → (curve_points N) in teardrops
+ *   F5: Rename footprint-level solder_paste_margin_ratio → solder_paste_ratio (preserve pads)
  * 
  * Conversion rules (K8 → K7): F10-F18
  *   F10: Header downgrade (version, remove generator_version, unquote generator)
@@ -65,6 +66,7 @@ import {
 import {
     downgradeArcMidToAngle,
     downgradePadToLegacy,
+    downgradeFootprintSolderPasteRatio,
     rectToLines,
 } from './pcb-converter.js';
 
@@ -150,6 +152,7 @@ export async function applyFpK9toK8(ast, log, warnings) {
         f2_embedded_fonts: 0,
         f3_font_thickness: 0,
         f4_curved_edges: 0,
+        f5_solder_paste_ratio: 0,
     };
 
     // F1: Header downgrade
@@ -172,12 +175,16 @@ export async function applyFpK9toK8(ast, log, warnings) {
     // F3/F4: Recursive transformation
     transformFpK9toK8(ast, stats, log, warnings);
 
+    // F5: Restore the pre-K9 footprint token without changing pad overrides.
+    stats.f5_solder_paste_ratio = downgradeFootprintSolderPasteRatio(ast);
+
     // Summary
     log.push('--- K9→K8 Footprint Summary ---');
     log.push(`F1 Header downgraded: ${stats.f1_header ? 'Yes' : 'No'}`);
     log.push(`F2 embedded_fonts removed: ${stats.f2_embedded_fonts}`);
     log.push(`F3 Font thickness cleaned: ${stats.f3_font_thickness}`);
     log.push(`F4 curved_edges→curve_points: ${stats.f4_curved_edges}`);
+    log.push(`F5 solder_paste_margin_ratio→solder_paste_ratio renamed: ${stats.f5_solder_paste_ratio}`);
 }
 
 function transformFpK9toK8(node, stats, log, warnings) {

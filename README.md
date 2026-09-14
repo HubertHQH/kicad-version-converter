@@ -301,7 +301,7 @@ Coordinates convert mm → mil (symbols are Y-up in both formats; no flip). Pin 
 | P21 | Remove `(arrow_direction ...)` from dimension style, `(keep_text_aligned yes)` → bare atom; `(suppress_zeroes yes)` → bare atom in dimension format |
 | P22 | Remove `(placement ...)` from zones (KiCad 9 multi-channel auto-placement area; not supported in K8) |
 | P23 | `(curved_edges ...)` → `(curve_points ...)` in pad teardrops (K9 rename; K8 uses old name) |
-| P27 | `(solder_paste_margin_ratio ...)` → `(solder_paste_ratio ...)` (K9 rename; K8 uses old name) |
+| P27 | Footprint-level `(solder_paste_margin_ratio ...)` → `(solder_paste_ratio ...)` (K9 rename); preserve pad-level `solder_paste_margin_ratio` and all numeric values |
 
 </details>
 
@@ -395,7 +395,7 @@ Coordinates convert mm → mil (symbols are Y-up in both formats; no flip). Pin 
 </details>
 
 <details>
-<summary><b>KiCad 9 → 8</b> — F1–F4</summary>
+<summary><b>KiCad 9 → 8</b> — F1–F5</summary>
 
 | Rule | Description |
 |------|-------------|
@@ -403,6 +403,7 @@ Coordinates convert mm → mil (symbols are Y-up in both formats; no flip). Pin 
 | F2 | Remove `(embedded_fonts ...)` |
 | F3 | Remove `thickness` from Datasheet/Description property fonts |
 | F4 | `(curved_edges ...)` → `(curve_points ...)` in pad teardrops (boolean → numeric) |
+| F5 | Footprint-level `(solder_paste_margin_ratio ...)` → `(solder_paste_ratio ...)`; preserve the value (including `-0`) and pad-level `solder_paste_margin_ratio`. Applies to chained downgrades through KiCad 5 |
 
 </details>
 
@@ -460,7 +461,11 @@ Coordinates convert mm → mil (symbols are Y-up in both formats; no flip). Pin 
 
 ## Verification
 
-KiCad 6 → KiCad 5 is the only conversion that crosses a file-family boundary and the only one that has been checked against **real KiCad 5** behavior. The other paths are mechanically verified — they re-parse and emit the right version stamps. Because a real KiCad 5 install wasn't available in-repo, the K5 output was validated against KiCad's **own source and demo projects**:
+Run `npm run test:fp-paste-ratio` for the `bug/TEST_ERR_original_v9.kicad_mod` regression and footprint/pad paste-ratio checks across standalone and PCB conversions (KiCad 9/10 → 8/7/6/5). The fix restores the pre-K9 **footprint-level** `solder_paste_ratio` token while preserving **pad-level** `solder_paste_margin_ratio` and numeric values, including `-0`. See [the regression notes](bug/README.md) for reproduction steps and corrected files.
+
+Both corrected paste-ratio fixtures (KiCad 7 and KiCad 5 output) were loaded successfully by **KiCad 7.0.5's native footprint loader**, preserving two pads, six graphic lines, and the ratio value. KiCad 4/5 token compatibility was checked against their parser source; these fixtures have not been tested in a KiCad 4/5 runtime.
+
+KiCad 6 → KiCad 5 schematic and symbol conversions cross a file-family boundary. Broader conversion checks use AST re-parsing, version stamps, and KiCad's **own source and demo projects**:
 
 - **PCB / footprint** — rules derived by diffing the regenerated board/footprint against KiCad's own `5.1/demos/video/video.kicad_pcb` per node type, and cross-checked with the 5.1 `PCB_PARSER` source (strict main parser vs. lenient `pcbplotparams`). This caught the `(host …)` header, `(paper)`→`(page)`, `User.1`–`User.9` layer removal, graphic-`fill`, model `offset`→`at`, board-level `(group)`, footprint-name-with-parens quoting, and dimension issues. A **whole-board grammar audit** (top-level node types + every `(module)` child vs. KiCad 5's accepted token sets) finds remaining issues structurally rather than one load-error round-trip at a time. `test-k5-pcb-synth.mjs` locks in every PCB rule without needing the (gitignored) asset fixtures.
 - **Schematic / symbol** — component orientation/mirror matrices, symbol arcs, and label orientation verified against KiCad 6/5.1 source (`sch_symbol.cpp`, `sch_sexpr_parser.cpp`, `sch_legacy_plugin.cpp`) and the matching legacy demo sheets; cache symbol naming verified against `SCH_COMPONENT::Resolve`.
@@ -468,8 +473,10 @@ KiCad 6 → KiCad 5 is the only conversion that crosses a file-family boundary a
 Run all harnesses (`node scripts/<file>`):
 
 ```bash
-for t in test-k1099-k10 test-k6k5 test-k5-pcb-synth check-k5-header test-cache-match test-consolidate test-orient test-arc-roundtrip test-label-orient; do node scripts/$t.mjs; done
+for t in test-k1099-k10 test-k6k5 test-k5-pcb-synth check-k5-header test-cache-match test-consolidate test-orient test-arc-roundtrip test-label-orient test-fp-unlocked test-fp-paste-ratio; do node scripts/$t.mjs; done
 ```
+
+Some harnesses require the gitignored `asset/` fixtures; for example, `test-arc-roundtrip.mjs` cannot run without `asset/kicad6`. The paste-ratio regression uses the committed `bug/` fixture and synthetic inputs.
 
 > Still best-effort (no KiCad-5 ground truth available): hierarchical **sheet-pin** side letters, dropped PCB parametric **dimensions** (removed, not redrawn), and the entire **KiCad 10.99 → 10** path (no public KiCad 10 build to round-trip through; DP7 is verified against KiCad's own KiCad 10 demo).
 
@@ -496,6 +503,8 @@ converter/
 │   ├── App.jsx                   # Main UI (upload, convert, download, 10.99 banner)
 │   └── main.jsx                  # Entry point
 ├── scripts/                      # Verification harnesses (run with `node scripts/<file>`)
+│   ├── test-fp-paste-ratio.mjs   # footprint/pad paste ratio scope, real fixture + K9/K10 downgrade chains
+│   ├── test-fp-unlocked.mjs      # remove unlocked text placement flags only from K5 output
 │   ├── test-k1099-k10.mjs        # KiCad 10.99 → 10 schematic + PCB rules (D1-D4, DP1-DP7) + detection
 │   ├── test-k6k5.mjs             # end-to-end: all 4 file types convert, re-parse, right stamps, value checks
 │   ├── test-k5-pcb-synth.mjs     # self-contained synthetic K6 board exercising every K5 PCB rule (P50-P64)
@@ -505,6 +514,7 @@ converter/
 │   ├── test-orient.mjs           # component matrices vs KiCad's exact orientation/mirror formula
 │   ├── test-arc-roundtrip.mjs    # symbol arc angles ↔ endpoints self-consistent
 │   └── test-label-orient.mjs     # label orientation vs KiCad 5 demo ground truth
+├── bug/                          # paste-ratio regression notes, K9 input, corrected K7/K5 output
 ├── index.html
 ├── package.json
 └── vite.config.js

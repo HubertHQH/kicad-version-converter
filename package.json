@@ -8,6 +8,7 @@
     "build": "vite build",
     "lint": "eslint .",
     "test:fp-unlocked": "node scripts/test-fp-unlocked.mjs",
+    "test:fp-paste-ratio": "node scripts/test-fp-paste-ratio.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
